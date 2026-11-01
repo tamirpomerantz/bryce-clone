@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Studio — Bryce 3D study</title>
+  <link rel="stylesheet" href="style.css?v=38" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./node_modules/three/build/three.module.js",
+      "three/addons/": "./node_modules/three/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <aside id="panel">
+    <section>
+      <h2>Scene</h2>
+      <label>Preset
+        <select id="scene"></select>
+      </label>
+      <button id="randomize" type="button">Randomize</button>
+      <label class="check"><input id="orbit" type="checkbox" /> Slow orbit</label>
+      <label class="check"><input id="mask" type="checkbox" /> Circle mask</label>
+      <label>Radius <input id="mask-r" type="range" min="5" max="100" step="1" value="90" /><em id="mask-r-v"></em></label>
+    </section>
+    <section>
+      <h2>Sky</h2>
+      <label>Color <input id="sky-c" type="range" min="0" max="100" step="1" value="58" /><em id="sky-c-v"></em></label>
+      <label>Tone <input id="sky-t" type="range" min="0" max="100" step="1" value="28" /><em id="sky-t-v"></em></label>
+    </section>
+    <section>
+      <h2>Earth</h2>
+      <label>Color <input id="earth-c" type="range" min="0" max="100" step="1" value="14" /><em id="earth-c-v"></em></label>
+      <label>Texture <input id="earth-t" type="range" min="0" max="100" step="1" value="8" /><em id="earth-t-v"></em></label>
+    </section>
+    <section>
+      <h2>Water</h2>
+      <label>Color <input id="water-c" type="range" min="0" max="100" step="1" value="22" /><em id="water-c-v"></em></label>
+      <label>Waves <input id="water-s" type="range" min="0" max="100" step="1" value="32" /><em id="water-s-v"></em></label>
+    </section>
+    <section>
+      <h2>Terrain editor</h2>
+      <canvas id="height-view" width="256" height="256"></canvas>
+      <p class="hint">Paint raises the height. Shift-paint lowers it.</p>
+      <div class="tabs">
+        <button id="tab-elevation" type="button" aria-pressed="true">Elevation</button>
+        <button id="tab-filtering" type="button">Filtering</button>
+      </div>
+      <div id="elevation-tools" class="tool-grid"></div>
+      <div id="filtering-tools" class="tool-grid" hidden></div>
+      <label>Seed <input id="seed" type="number" min="1" max="999999" value="1" /></label>
+      <label>From the CD
+        <select id="map">
+          <option value="">— height map —</option>
+        </select>
+      </label>
+      <label>Material
+        <select id="material">
+          <option value="0">Canyon</option>
+          <option value="1">Alpine</option>
+          <option value="2">Desert</option>
+          <option value="3">Moon</option>
+        </select>
+      </label>
+      <p id="status" class="status">Ready</p>
+      <p class="note">Drag to orbit, scroll to dolly, right-drag to pan. Press i to hide this panel. A quicker picture follows the camera, and the full one arrives when it settles.</p>
+    </section>
+  </aside>
+  <script type="module" src="js/main.js?v=41"></script>
+</body>
+</html>

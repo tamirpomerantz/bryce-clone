@@ -1,0 +1,104 @@
+[
+  {
+    "id": "mountains",
+    "name": "Mountains",
+    "file": "mountains.png",
+    "source": "Basic-Mont.TIF"
+  },
+  {
+    "id": "valley",
+    "name": "Valley",
+    "file": "valley.png",
+    "source": "Basic-Valley.TIF"
+  },
+  {
+    "id": "lakes",
+    "name": "Lakes",
+    "file": "lakes.png",
+    "source": "Basic-Lakes.TIF"
+  },
+  {
+    "id": "river",
+    "name": "River",
+    "file": "river.png",
+    "source": "Basic-river.TIF"
+  },
+  {
+    "id": "east-west",
+    "name": "East\u2013West ridge",
+    "file": "east-west.png",
+    "source": "Basic-EstWest.TIF"
+  },
+  {
+    "id": "north-south",
+    "name": "North\u2013South ridge",
+    "file": "north-south.png",
+    "source": "Basic-NorthSouth.TIF"
+  },
+  {
+    "id": "dunes",
+    "name": "Dunes",
+    "file": "dunes.png",
+    "source": "Dunes.TIF"
+  },
+  {
+    "id": "crater-lake",
+    "name": "Crater Lake",
+    "file": "crater-lake.png",
+    "source": "Crater Lake.TIF"
+  },
+  {
+    "id": "erosion-1",
+    "name": "Erosion 1",
+    "file": "erosion-1.png",
+    "source": "Erosion1.TIF"
+  },
+  {
+    "id": "erosion-3",
+    "name": "Erosion 3",
+    "file": "erosion-3.png",
+    "source": "Erosion 3.TIF"
+  },
+  {
+    "id": "erosion-6",
+    "name": "Erosion 6",
+    "file": "erosion-6.png",
+    "source": "Erosion 6.TIF"
+  },
+  {
+    "id": "iceberg",
+    "name": "Iceberg",
+    "file": "iceberg.png",
+    "source": "Iceberg!.TIF"
+  },
+  {
+    "id": "complex",
+    "name": "Complex",
+    "file": "complex.png",
+    "source": "complex.TIF"
+  },
+  {
+    "id": "frac-mountains",
+    "name": "Fractal mountains",
+    "file": "frac-mountains.png",
+    "source": "kk lib frac mountains.TIF"
+  },
+  {
+    "id": "gradient-mountains",
+    "name": "Gradient mountains",
+    "file": "gradient-mountains.png",
+    "source": "kk lib gradient mountains.TIF"
+  },
+  {
+    "id": "river-1",
+    "name": "River 1",
+    "file": "river-1.png",
+    "source": "river 1.TIF"
+  },
+  {
+    "id": "editor",
+    "name": "Editor terrain",
+    "file": "editor.png",
+    "source": "TE terrain.TIF"
+  }
+]
