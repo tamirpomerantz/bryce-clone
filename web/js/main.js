@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { applyEffect, blank, createRand, erode, fractal, newRelief, resize } from "./terrain.js?v=23";
+import { presentSpectrogram, readSpectrumColumn, writeSpectrogram } from "./listen.js?v=3";
 import {
   cloudStep,
   hazeBryce30,
@@ -411,7 +412,7 @@ let gpuSeen = false;
 let gpuDirty = true;
 
 function gpuLive() {
-  return viewDrag || performance.now() < liveUntil || performance.now() < calmAt;
+  return viewDrag || audioOn || performance.now() < liveUntil || performance.now() < calmAt;
 }
 
 function viewSize(preview) {
@@ -632,6 +633,12 @@ function scheduleBake(preview) {
 }
 
 function buildMesh() {
+  if (audioOn && audioBase && !audioApplying && grid.heights !== specHeights) {
+    audioBase = grid.heights.slice();
+    audioApplying = true;
+    showSpectrogram();
+    audioApplying = false;
+  }
   const { heights, side } = grid;
   const seg = side - 1;
   const pos = new Float32Array(side * side * 3);
@@ -822,11 +829,13 @@ async function runTool(name) {
     return;
   }
   if (name === "new") {
+    restoreListenBase();
     remember();
     resetRand();
     await useNew();
     return;
   }
+  restoreListenBase();
   remember();
   setStatus(TOOL_NAMES[name] || name);
   await paintSoon();
@@ -869,6 +878,7 @@ function bindBrush() {
   canvas.addEventListener("pointerdown", (event) => {
     brushDown = true;
     canvas.setPointerCapture(event.pointerId);
+    restoreListenBase();
     remember();
     const p = point(event);
     paintCell(p.x, p.y, p.lower);
@@ -969,6 +979,196 @@ function onResize() {
   scheduleBake();
 }
 
+let audioOn = false;
+let audioApplying = false;
+let audioBase = null;
+let audioCtx = null;
+let audioStream = null;
+let analyser = null;
+let audioFreq = null;
+let audioTime = null;
+let audioMeter = 0;
+let lastListenLabel = "";
+let lastMeter = -1;
+let specHistory = null;
+let specRaw = null;
+let specHeights = null;
+let specTmp = null;
+let specTmp2 = null;
+let specHead = 0;
+const specView = { blur: 0, mirror: false, turns: 0, zoom: 1, low: 0, high: 1 };
+let specSide = 0;
+
+function listenSense() {
+  const el = $("listen-s");
+  if (!el) return 0.7;
+  return Math.max(0, Math.min(1, Number(el.value) / 100));
+}
+
+function restoreListenBase() {
+  if (!audioOn || !audioBase) return;
+  grid = { heights: audioBase.slice(), side: audioBase.length === grid.side * grid.side ? grid.side : Math.round(Math.sqrt(audioBase.length)) };
+}
+
+function stopListen() {
+  audioOn = false;
+  if (audioStream) {
+    for (const track of audioStream.getTracks()) track.stop();
+    audioStream = null;
+  }
+  if (audioCtx) {
+    audioCtx.close();
+    audioCtx = null;
+  }
+  analyser = null;
+  audioFreq = null;
+}
+
+async function setListen(on) {
+  if (!on) {
+    const base = audioBase;
+    stopListen();
+    audioBase = null;
+    specHistory = null;
+    specRaw = null;
+    specHeights = null;
+    specTmp = null;
+    specTmp2 = null;
+    specHead = 0;
+    specSide = 0;
+    audioMeter = 0;
+    lastListenLabel = "";
+    lastMeter = -1;
+    setMeter(0);
+    $("listen-v").textContent = "";
+    $("listen-level").textContent = "";
+    if (base) {
+      grid = { heights: base.slice(), side: grid.side };
+      buildMesh();
+    }
+    return;
+  }
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+  } catch {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      $("listen").checked = false;
+      $("listen-v").textContent = "Microphone blocked";
+      setStatus("Microphone blocked");
+      return;
+    }
+  }
+  if (!$("listen").checked) {
+    for (const track of stream.getTracks()) track.stop();
+    return;
+  }
+  const ctx = new AudioContext();
+  if (ctx.state === "suspended") await ctx.resume();
+  const source = ctx.createMediaStreamSource(stream);
+  const node = ctx.createAnalyser();
+  node.fftSize = 2048;
+  node.smoothingTimeConstant = 0;
+  source.connect(node);
+  audioCtx = ctx;
+  audioStream = stream;
+  analyser = node;
+  audioFreq = new Float32Array(node.frequencyBinCount);
+  audioTime = new Float32Array(node.fftSize);
+  audioBase = grid.heights.slice();
+  specSide = grid.side;
+  specHistory = new Float32Array(specSide * specSide);
+  specRaw = new Uint16Array(specSide * specSide);
+  specHeights = new Uint16Array(specSide * specSide);
+  specTmp = new Uint16Array(specSide * specSide);
+  specTmp2 = new Uint16Array(specSide * specSide);
+  specHead = 0;
+  audioOn = true;
+  $("listen-v").textContent = "";
+  pushSpectrumColumn(true);
+  showSpectrogram(true);
+  setStatus("Listening");
+}
+
+function listenLabel(text) {
+  if (text === lastListenLabel) return;
+  lastListenLabel = text;
+  $("listen-v").textContent = text;
+}
+
+function setMeter(level) {
+  const pct = Math.max(0, Math.min(100, Math.round(level * 100)));
+  if (pct === lastMeter) return;
+  lastMeter = pct;
+  const bar = $("listen-meter-bar");
+  if (bar) bar.style.width = pct + "%";
+  const label = $("listen-level");
+  if (label) label.textContent = audioOn ? pct + "%" : "";
+}
+
+function pushSpectrumColumn(fill) {
+  analyser.getFloatFrequencyData(audioFreq);
+  const col = readSpectrumColumn(audioFreq, audioCtx.sampleRate, analyser.fftSize, specSide);
+  if (fill) {
+    for (let x = 0; x < specSide; x++) specHistory.set(col, x * specSide);
+    specHead = 0;
+  } else {
+    specHistory.set(col, specHead * specSide);
+    specHead = (specHead + 1) % specSide;
+  }
+  let peakV = 0;
+  let peakY = 0;
+  for (let y = 0; y < specSide; y++) {
+    if (col[y] > peakV) {
+      peakV = col[y];
+      peakY = y;
+    }
+  }
+  listenLabel(peakV < 0.12 ? "" : "Peak " + Math.round((peakY / (specSide - 1)) * 100) + "%");
+}
+
+function specStateText() {
+  const parts = ["Blur " + specView.blur];
+  if (specView.turns) parts.push(specView.turns * 90 + "°");
+  if (specView.mirror) parts.push("Mirror");
+  const el = $("spec-state");
+  if (el) el.textContent = parts.join(" · ");
+}
+
+function showSpectrogram(rebuild) {
+  if (!specRaw || !specHistory || !specHeights) return;
+  writeSpectrogram(specRaw, specSide, specHistory, specHead, listenSense());
+  presentSpectrogram(specRaw, specHeights, specSide, specView, specTmp, specTmp2);
+  grid = { heights: specHeights, side: specSide };
+  if (rebuild) {
+    audioApplying = true;
+    buildMesh();
+    audioApplying = false;
+    return;
+  }
+  drawHeight();
+  scheduleBake(true);
+}
+
+function listenStep(dt) {
+  if (!audioOn || !analyser || !audioTime || !specHistory) return;
+  if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+  analyser.getFloatTimeDomainData(audioTime);
+  let sum = 0;
+  for (let i = 0; i < audioTime.length; i++) sum += audioTime[i] * audioTime[i];
+  const rms = Math.sqrt(sum / audioTime.length);
+  const shown = Math.min(1, rms * 14);
+  const meterK = 1 - Math.exp(-dt / (shown > audioMeter ? 0.05 : 0.18));
+  audioMeter += (shown - audioMeter) * meterK;
+  setMeter(audioMeter);
+  pushSpectrumColumn(false);
+  showSpectrogram(false);
+}
+
 const clock = new THREE.Clock();
 let settleTimer = 0;
 function frame() {
@@ -982,6 +1182,7 @@ function frame() {
   const live = gpuLive();
   if (shownLive && !live) gpuDirty = true;
   shownLive = live;
+  listenStep(dt);
   const wind = sceneLook ? sceneLook.wind : 0.28;
   const off = baseUniforms.uCloudOffset.value;
   off.x += wind * 0.35 * dt;
@@ -997,7 +1198,10 @@ function frame() {
     if (!gpuBaker.busy()) {
       renderer.render(scene, camera);
       if (gpuHold > 0) gpuHold -= 1;
-      else gpuKick();
+      else {
+        if (audioOn && specHeights && gpuDirty) gpuBaker.setField(specHeights, specSide, WIDTH, HEIGHT_SCALE);
+        gpuKick();
+      }
     }
   } else {
     const moved = camera.position.distanceTo(lastEye) > 0.5;
@@ -1050,6 +1254,48 @@ function bind() {
   $("orbit").addEventListener("change", () => {
     controls.autoRotate = $("orbit").checked;
   });
+  $("listen").addEventListener("change", () => {
+    setListen($("listen").checked);
+  });
+  $("listen-s").addEventListener("input", () => {
+    $("listen-s-v").textContent = Math.round(Number($("listen-s").value)) + "%";
+    if (audioOn) showSpectrogram(false);
+  });
+  $("blur-less").addEventListener("click", () => {
+    specView.blur = Math.max(0, specView.blur - 1);
+    specStateText();
+    if (audioOn) showSpectrogram(false);
+  });
+  $("blur-more").addEventListener("click", () => {
+    specView.blur = Math.min(16, specView.blur + 1);
+    specStateText();
+    if (audioOn) showSpectrogram(false);
+  });
+  $("spec-mirror").addEventListener("click", () => {
+    specView.mirror = !specView.mirror;
+    $("spec-mirror").setAttribute("aria-pressed", String(specView.mirror));
+    specStateText();
+    if (audioOn) showSpectrogram(false);
+  });
+  $("spec-rotate").addEventListener("click", () => {
+    specView.turns = (specView.turns + 1) & 3;
+    specStateText();
+    if (audioOn) showSpectrogram(false);
+  });
+  $("spec-zoom").addEventListener("input", () => {
+    specView.zoom = Number($("spec-zoom").value) / 100;
+    $("spec-zoom-v").textContent = Math.round(specView.zoom * 100) + "%";
+    if (audioOn) showSpectrogram(false);
+  });
+  const levels = () => {
+    specView.low = Number($("spec-low").value) / 100;
+    specView.high = Number($("spec-high").value) / 100;
+    $("spec-low-v").textContent = Math.round(specView.low * 100) + "%";
+    $("spec-high-v").textContent = Math.round(specView.high * 100) + "%";
+    if (audioOn) showSpectrogram(false);
+  };
+  $("spec-low").addEventListener("input", levels);
+  $("spec-high").addEventListener("input", levels);
   window.addEventListener("resize", onResize);
   window.addEventListener("keydown", (event) => {
     if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;

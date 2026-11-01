@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Studio — Bryce 3D study</title>
-  <link rel="stylesheet" href="style.css?v=38" />
+  <link rel="stylesheet" href="style.css?v=40" />
   <script type="importmap">
   {
     "imports": {
@@ -44,6 +44,23 @@
     </section>
     <section>
       <h2>Terrain editor</h2>
+      <label class="check"><input id="listen" type="checkbox" /> Microphone</label>
+      <div class="meter-row">
+        <div class="meter" id="listen-meter"><span id="listen-meter-bar"></span></div>
+        <em id="listen-level"></em>
+      </div>
+      <label>Sensitivity <input id="listen-s" type="range" min="0" max="100" step="1" value="70" /><em id="listen-s-v">70%</em></label>
+      <p class="hint">While the microphone is on, this map is the sound spectrogram. <em id="listen-v"></em></p>
+      <div class="tool-grid" id="spec-tools">
+        <button id="blur-less" type="button">Blur less</button>
+        <button id="blur-more" type="button">Blur more</button>
+        <button id="spec-mirror" type="button" aria-pressed="false">Mirror</button>
+        <button id="spec-rotate" type="button">Rotate</button>
+      </div>
+      <p class="hint" id="spec-state">Blur 0</p>
+      <label>Zoom <input id="spec-zoom" type="range" min="100" max="400" step="5" value="100" /><em id="spec-zoom-v">100%</em></label>
+      <label>Low cut <input id="spec-low" type="range" min="0" max="100" step="1" value="0" /><em id="spec-low-v">0%</em></label>
+      <label>High cut <input id="spec-high" type="range" min="0" max="100" step="1" value="100" /><em id="spec-high-v">100%</em></label>
       <canvas id="height-view" width="256" height="256"></canvas>
       <p class="hint">Paint raises the height. Shift-paint lowers it.</p>
       <div class="tabs">
@@ -70,6 +87,6 @@
       <p class="note">Drag to orbit, scroll to dolly, right-drag to pan. Press i to hide this panel. A quicker picture follows the camera, and the full one arrives when it settles.</p>
     </section>
   </aside>
-  <script type="module" src="js/main.js?v=41"></script>
+  <script type="module" src="js/main.js?v=47"></script>
 </body>
 </html>
