@@ -145,15 +145,69 @@ button:active {
   background: linear-gradient(#d8d8d4, #bdbdb8);
 }
 
+#cam-view {
+  width: 100%;
+  height: auto;
+  display: block;
+  margin: 6px 0 2px;
+  background: #111;
+  border: 1px solid var(--line);
+  image-rendering: pixelated;
+}
+
+#cam-find { width: 100%; margin: 2px 0 4px; }
+
+.height-wrap {
+  position: relative;
+  width: 100%;
+  margin: 0;
+  border: 1px solid var(--line);
+  background: #111;
+  touch-action: none;
+  overflow: hidden;
+}
+
 #height-view {
   width: 100%;
   height: auto;
   display: block;
   background: #111;
-  border: 1px solid var(--line);
+  border: 0;
   cursor: crosshair;
   image-rendering: pixelated;
+  vertical-align: top;
 }
+
+.height-crop {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px solid #8ec5ff;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+  cursor: move;
+}
+
+.height-crop.is-idle {
+  box-shadow: none;
+  border-color: transparent;
+  pointer-events: none;
+}
+
+.height-crop-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  background: #8ec5ff;
+  border: 1px solid #0d0d0d;
+  box-sizing: border-box;
+  pointer-events: auto;
+}
+
+.height-crop-handle[data-handle="nw"] { left: 0; top: 0; cursor: nwse-resize; }
+.height-crop-handle[data-handle="ne"] { left: 100%; top: 0; cursor: nesw-resize; }
+.height-crop-handle[data-handle="sw"] { left: 0; top: 100%; cursor: nesw-resize; }
+.height-crop-handle[data-handle="se"] { left: 100%; top: 100%; cursor: nwse-resize; }
 
 .hint { margin: 4px 0 0; font-size: 11px; opacity: 0.8; }
 

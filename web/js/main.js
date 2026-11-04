@@ -1,7 +1,13 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { applyEffect, blank, createRand, erode, fractal, newRelief, resize } from "./terrain.js?v=23";
-import { presentSpectrogram, readSpectrumColumn, writeSpectrogram } from "./listen.js?v=3";
+import {
+  cropStretch,
+  presentSpectrogram,
+  readSpectrumColumn,
+  writeSpectrogram,
+} from "./listen.js?v=8";
+import { createTracker } from "./camera.js?v=2";
 import {
   cloudStep,
   hazeBryce30,
@@ -769,10 +775,12 @@ function resetRand() {
   editorRand = createRand(readNumber("seed") || 1);
 }
 
-function drawHeight() {
+function drawHeight(sourceHeights) {
   const canvas = $("height-view");
   if (!canvas) return;
-  const { heights, side } = grid;
+  const heights = sourceHeights || grid.heights;
+  const side = grid.side;
+  if (!heights || heights.length !== side * side) return;
   if (canvas.width !== side) {
     canvas.width = side;
     canvas.height = side;
@@ -789,6 +797,7 @@ function drawHeight() {
     data[o + 3] = 255;
   }
   ctx.putImageData(image, 0, 0);
+  syncCropOverlay();
 }
 
 function remember() {
@@ -876,24 +885,51 @@ function bindBrush() {
     };
   };
   canvas.addEventListener("pointerdown", (event) => {
+    // With mic on, normal drag crops; Shift still paints the full histogram.
+    if (audioOn && !event.shiftKey) return;
     brushDown = true;
     canvas.setPointerCapture(event.pointerId);
-    restoreListenBase();
-    remember();
+    if (!audioOn) {
+      restoreListenBase();
+      remember();
+    }
     const p = point(event);
-    paintCell(p.x, p.y, p.lower);
-    drawHeight();
+    if (audioOn && specDisplay) {
+      const saved = grid;
+      grid = { heights: specDisplay, side: specSide };
+      paintCell(p.x, p.y, p.lower);
+      grid = saved;
+      applyHeightCrop(specDisplay, specHeights);
+      drawHeight(specDisplay);
+    } else {
+      paintCell(p.x, p.y, p.lower);
+      drawHeight();
+    }
   });
   canvas.addEventListener("pointermove", (event) => {
     if (!brushDown) return;
     const p = point(event);
-    paintCell(p.x, p.y, p.lower);
-    drawHeight();
+    if (audioOn && specDisplay) {
+      const saved = grid;
+      grid = { heights: specDisplay, side: specSide };
+      paintCell(p.x, p.y, p.lower);
+      grid = saved;
+      applyHeightCrop(specDisplay, specHeights);
+      drawHeight(specDisplay);
+    } else {
+      paintCell(p.x, p.y, p.lower);
+      drawHeight();
+    }
   });
   const finish = () => {
     if (!brushDown) return;
     brushDown = false;
-    buildMesh();
+    if (audioOn) {
+      grid = { heights: specHeights, side: specSide };
+      scheduleBake(true);
+    } else {
+      buildMesh();
+    }
     setStatus("Brush");
   };
   canvas.addEventListener("pointerup", finish);
@@ -992,12 +1028,16 @@ let lastListenLabel = "";
 let lastMeter = -1;
 let specHistory = null;
 let specRaw = null;
+let specDisplay = null;
 let specHeights = null;
 let specTmp = null;
 let specTmp2 = null;
 let specHead = 0;
-const specView = { blur: 0, mirror: false, turns: 0, zoom: 1, low: 0, high: 1 };
+const specView = { blur: 0, mirror: false, turns: 0, zoom: 1, low: 0, high: 1, brightness: 0.5, radial: false, invert: false };
 let specSide = 0;
+/** @type {null | { x0: number, y0: number, x1: number, y1: number }} normalized crop on the height view */
+let heightCrop = null;
+let cropDrag = null;
 
 function listenSense() {
   const el = $("listen-s");
@@ -1031,17 +1071,20 @@ async function setListen(on) {
     audioBase = null;
     specHistory = null;
     specRaw = null;
+    specDisplay = null;
     specHeights = null;
     specTmp = null;
     specTmp2 = null;
     specHead = 0;
     specSide = 0;
+    heightCrop = null;
     audioMeter = 0;
     lastListenLabel = "";
     lastMeter = -1;
     setMeter(0);
     $("listen-v").textContent = "";
     $("listen-level").textContent = "";
+    syncCropOverlay();
     if (base) {
       grid = { heights: base.slice(), side: grid.side };
       buildMesh();
@@ -1083,10 +1126,14 @@ async function setListen(on) {
   specSide = grid.side;
   specHistory = new Float32Array(specSide * specSide);
   specRaw = new Uint16Array(specSide * specSide);
+  specDisplay = new Uint16Array(specSide * specSide);
   specHeights = new Uint16Array(specSide * specSide);
   specTmp = new Uint16Array(specSide * specSide);
   specTmp2 = new Uint16Array(specSide * specSide);
   specHead = 0;
+  if (!heightCrop) {
+    heightCrop = { x0: 0.15, y0: 0.15, x1: 0.85, y1: 0.85 };
+  }
   audioOn = true;
   $("listen-v").textContent = "";
   pushSpectrumColumn(true);
@@ -1135,23 +1182,151 @@ function specStateText() {
   const parts = ["Blur " + specView.blur];
   if (specView.turns) parts.push(specView.turns * 90 + "°");
   if (specView.mirror) parts.push("Mirror");
+  if (specView.radial) parts.push("Radial");
+  if (specView.invert) parts.push("Inverse");
   const el = $("spec-state");
   if (el) el.textContent = parts.join(" · ");
 }
 
+function applyHeightCrop(src, dest) {
+  if (heightCrop) cropStretch(src, dest, specSide, heightCrop);
+  else if (dest !== src) dest.set(src);
+}
+
 function showSpectrogram(rebuild) {
-  if (!specRaw || !specHistory || !specHeights) return;
+  if (!specRaw || !specHistory || !specHeights || !specDisplay) return;
   writeSpectrogram(specRaw, specSide, specHistory, specHead, listenSense());
-  presentSpectrogram(specRaw, specHeights, specSide, specView, specTmp, specTmp2);
+  presentSpectrogram(specRaw, specDisplay, specSide, specView, specTmp, specTmp2);
+  applyHeightCrop(specDisplay, specHeights);
   grid = { heights: specHeights, side: specSide };
   if (rebuild) {
     audioApplying = true;
     buildMesh();
     audioApplying = false;
+    drawHeight(specDisplay);
     return;
   }
-  drawHeight();
+  drawHeight(specDisplay);
   scheduleBake(true);
+}
+
+function syncCropOverlay() {
+  const el = $("height-crop");
+  const wrap = $("height-wrap");
+  const canvas = $("height-view");
+  if (!el || !wrap || !canvas) return;
+  if (!heightCrop || !audioOn) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  el.classList.toggle("is-idle", false);
+  const u0 = Math.min(heightCrop.x0, heightCrop.x1);
+  const v0 = Math.min(heightCrop.y0, heightCrop.y1);
+  const u1 = Math.max(heightCrop.x0, heightCrop.x1);
+  const v1 = Math.max(heightCrop.y0, heightCrop.y1);
+  el.style.left = u0 * 100 + "%";
+  el.style.top = v0 * 100 + "%";
+  el.style.width = Math.max(0.5, (u1 - u0) * 100) + "%";
+  el.style.height = Math.max(0.5, (v1 - v0) * 100) + "%";
+}
+
+function normFromEvent(event) {
+  const wrap = $("height-wrap");
+  const rect = wrap.getBoundingClientRect();
+  return {
+    x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+    y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+  };
+}
+
+function refreshTerrainFromCrop() {
+  if (!audioOn || !specDisplay || !specHeights) return;
+  applyHeightCrop(specDisplay, specHeights);
+  grid = { heights: specHeights, side: specSide };
+  scheduleBake(true);
+}
+
+function bindHeightCrop() {
+  const wrap = $("height-wrap");
+  const cropEl = $("height-crop");
+  if (!wrap || !cropEl) return;
+
+  const finish = () => {
+    if (!cropDrag) return;
+    cropDrag = null;
+    refreshTerrainFromCrop();
+  };
+
+  wrap.addEventListener("pointerdown", (event) => {
+    if (!audioOn) return;
+    if (event.button !== 0) return;
+    // Let Shift-paint reach the canvas brush instead.
+    if (event.shiftKey) return;
+    const handle = event.target?.dataset?.handle;
+    const onCrop = event.target === cropEl || handle;
+    event.preventDefault();
+    wrap.setPointerCapture(event.pointerId);
+    const p = normFromEvent(event);
+    if (handle && heightCrop) {
+      cropDrag = { mode: "resize", handle, start: p, orig: { ...heightCrop } };
+    } else if (onCrop && heightCrop) {
+      cropDrag = { mode: "move", start: p, orig: { ...heightCrop } };
+    } else {
+      heightCrop = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+      cropDrag = { mode: "create", start: p };
+      syncCropOverlay();
+    }
+  });
+
+  wrap.addEventListener("pointermove", (event) => {
+    if (!cropDrag || !heightCrop) return;
+    const p = normFromEvent(event);
+    if (cropDrag.mode === "create") {
+      heightCrop.x1 = p.x;
+      heightCrop.y1 = p.y;
+    } else if (cropDrag.mode === "move") {
+      const dx = p.x - cropDrag.start.x;
+      const dy = p.y - cropDrag.start.y;
+      let x0 = cropDrag.orig.x0 + dx;
+      let y0 = cropDrag.orig.y0 + dy;
+      let x1 = cropDrag.orig.x1 + dx;
+      let y1 = cropDrag.orig.y1 + dy;
+      const minX = Math.min(x0, x1);
+      const maxX = Math.max(x0, x1);
+      const minY = Math.min(y0, y1);
+      const maxY = Math.max(y0, y1);
+      let ox = 0;
+      let oy = 0;
+      if (minX < 0) ox = -minX;
+      else if (maxX > 1) ox = 1 - maxX;
+      if (minY < 0) oy = -minY;
+      else if (maxY > 1) oy = 1 - maxY;
+      heightCrop = { x0: x0 + ox, y0: y0 + oy, x1: x1 + ox, y1: y1 + oy };
+    } else if (cropDrag.mode === "resize") {
+      const next = { ...cropDrag.orig };
+      const h = cropDrag.handle;
+      if (h.includes("n")) next.y0 = p.y;
+      if (h.includes("s")) next.y1 = p.y;
+      if (h.includes("w")) next.x0 = p.x;
+      if (h.includes("e")) next.x1 = p.x;
+      heightCrop = next;
+    }
+    syncCropOverlay();
+    refreshTerrainFromCrop();
+  });
+
+  wrap.addEventListener("pointerup", finish);
+  wrap.addEventListener("pointercancel", finish);
+  wrap.addEventListener("lostpointercapture", finish);
+
+  wrap.addEventListener("dblclick", (event) => {
+    if (!audioOn) return;
+    event.preventDefault();
+    heightCrop = { x0: 0, y0: 0, x1: 1, y1: 1 };
+    syncCropOverlay();
+    refreshTerrainFromCrop();
+  });
 }
 
 function listenStep(dt) {
@@ -1169,6 +1344,235 @@ function listenStep(dt) {
   showSpectrogram(false);
 }
 
+const CAM_PAIRS = [
+  ["sky-c", "sky-t"],
+  ["earth-c", "earth-t"],
+  ["water-c", "water-s"],
+];
+const CAM_COLORS = ["#8ec5ff", "#e0b15a", "#62d0c4"];
+const camOpts = { smooth: 0.7 };
+const camVideo = document.createElement("video");
+camVideo.playsInline = true;
+camVideo.muted = true;
+camVideo.autoplay = true;
+camVideo.style.display = "none";
+document.body.appendChild(camVideo);
+let camTracker = null;
+let camViewCtx = null;
+let camStream = null;
+let camDevice = "";
+let camAcc = 0;
+let camRetryTimer = 0;
+
+function camStatus(text) {
+  const el = $("cam-status");
+  if (el) el.textContent = text;
+}
+
+function seedTracks() {
+  if (!camTracker) return;
+  for (let i = 0; i < 3; i++) {
+    camTracker.tracks[i].x = unit(CAM_PAIRS[i][0]);
+    camTracker.tracks[i].y = 1 - unit(CAM_PAIRS[i][1]);
+  }
+}
+
+function ensureCamSize(vw, vh) {
+  const w = 160;
+  const h = Math.max(48, Math.min(120, Math.round((w * vh) / vw)));
+  if (camTracker && camTracker.width === w && camTracker.height === h) return;
+  const prev = camTracker ? camTracker.tracks.map((t) => ({ x: t.x, y: t.y })) : null;
+  camTracker = createTracker(w, h);
+  if (prev) {
+    for (let i = 0; i < 3; i++) {
+      camTracker.tracks[i].x = prev[i].x;
+      camTracker.tracks[i].y = prev[i].y;
+    }
+  } else seedTracks();
+  const view = $("cam-view");
+  view.width = w;
+  view.height = h;
+  camViewCtx = view.getContext("2d");
+}
+
+function paintCamHands() {
+  const ctx = camViewCtx;
+  const tracker = camTracker;
+  if (!ctx || !tracker) return;
+  ctx.drawImage(camVideo, 0, 0, tracker.width, tracker.height);
+  ctx.font = "bold 11px sans-serif";
+  ctx.lineWidth = 2;
+  const hands = tracker.hands || [];
+  for (let i = 0; i < hands.length; i++) {
+    const hand = hands[i];
+    const t = hand.track;
+    ctx.strokeStyle = t >= 0 ? CAM_COLORS[t] : "rgba(255,255,255,0.45)";
+    ctx.strokeRect(
+      hand.x0 + 0.5,
+      hand.y0 + 0.5,
+      Math.max(1, hand.x1 - hand.x0),
+      Math.max(1, hand.y1 - hand.y0)
+    );
+  }
+  for (let t = 0; t < 3; t++) {
+    const x = tracker.tracks[t].x * (tracker.width - 1);
+    const y = tracker.tracks[t].y * (tracker.height - 1);
+    ctx.fillStyle = CAM_COLORS[t];
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillText(String(t + 1), x + 5, y - 3);
+  }
+}
+
+function pushTracks() {
+  let changed = false;
+  for (let i = 0; i < 3; i++) {
+    let x = camTracker.tracks[i].x;
+    let y = camTracker.tracks[i].y;
+    if (x < 0) x = 0;
+    else if (x > 1) x = 1;
+    if (y < 0) y = 0;
+    else if (y > 1) y = 1;
+    const across = Math.round(x * 100);
+    const up = Math.round((1 - y) * 100);
+    const a = $(CAM_PAIRS[i][0]);
+    const b = $(CAM_PAIRS[i][1]);
+    if (Number(a.value) !== across) {
+      a.value = String(across);
+      changed = true;
+    }
+    if (Number(b.value) !== up) {
+      b.value = String(up);
+      changed = true;
+    }
+  }
+  if (changed) applyLook();
+}
+
+function camStep(dt) {
+  if (!camStream || camVideo.readyState < 2) return;
+  camAcc += dt;
+  // Detect a bit slower than paint — model is heavier than blobs.
+  if (camAcc < 0.08) return;
+  camAcc = 0;
+  const vw = camVideo.videoWidth;
+  const vh = camVideo.videoHeight;
+  if (!vw || !vh) return;
+  ensureCamSize(vw, vh);
+  const err = camTracker.step(camVideo, camOpts, performance.now());
+  if (!camTracker.ready && err) camStatus(err);
+  paintCamHands();
+  pushTracks();
+}
+
+function stopCamera() {
+  clearTimeout(camRetryTimer);
+  camDevice = "";
+  camAcc = 0;
+  if (camStream) {
+    for (const track of camStream.getTracks()) {
+      track.onended = null;
+      track.stop();
+    }
+    camStream = null;
+  }
+  camVideo.srcObject = null;
+}
+
+function scheduleCamRetry(deviceId) {
+  clearTimeout(camRetryTimer);
+  camRetryTimer = setTimeout(() => {
+    if ($("cam-device").value === deviceId) startCamera(deviceId);
+  }, 5000);
+}
+
+async function startCamera(deviceId) {
+  stopCamera();
+  if (!deviceId) {
+    camStatus("");
+    return;
+  }
+  camDevice = deviceId;
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        deviceId: { exact: deviceId },
+        width: { ideal: 320 },
+        height: { ideal: 180 },
+        frameRate: { ideal: 12, max: 15 },
+      },
+    });
+  } catch {
+    camStream = null;
+    camDevice = "";
+    $("cam-device").value = "";
+    camStatus("Camera blocked");
+    return;
+  }
+  if ($("cam-device").value !== deviceId) {
+    for (const track of camStream.getTracks()) track.stop();
+    camStream = null;
+    return;
+  }
+  camVideo.srcObject = camStream;
+  try {
+    await camVideo.play();
+  } catch {
+    stopCamera();
+    $("cam-device").value = "";
+    camStatus("Camera blocked");
+    return;
+  }
+  seedTracks();
+  const track = camStream.getVideoTracks()[0];
+  if (track) {
+    track.onended = () => {
+      if (camDevice !== deviceId) return;
+      camStatus("Camera lost");
+      scheduleCamRetry(deviceId);
+    };
+  }
+  camStatus("Tracking hands");
+  if (camTracker) void camTracker.ensureModel?.();
+}
+
+async function findCameras() {
+  if (!camStream) {
+    try {
+      const probe = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      for (const track of probe.getTracks()) track.stop();
+    } catch {
+      camStatus("Camera blocked");
+      return;
+    }
+  }
+  const devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+  const sel = $("cam-device");
+  const current = sel.value;
+  sel.replaceChildren();
+  const off = document.createElement("option");
+  off.value = "";
+  off.textContent = "Off";
+  sel.appendChild(off);
+  devices.forEach((device, i) => {
+    const o = document.createElement("option");
+    o.value = device.deviceId;
+    o.textContent = device.label || "Camera " + (i + 1);
+    sel.appendChild(o);
+  });
+  const still = devices.some((d) => d.deviceId === current);
+  sel.value = still ? current : "";
+  if (!still && current) stopCamera();
+  camStatus(devices.length ? "" : "No camera found");
+}
+
+function readCamOpts() {
+  camOpts.smooth = readNumber("cam-smooth") / 100;
+  $("cam-smooth-v").textContent = Math.round(camOpts.smooth * 100) + "%";
+}
+
 const clock = new THREE.Clock();
 let settleTimer = 0;
 function frame() {
@@ -1183,6 +1587,7 @@ function frame() {
   if (shownLive && !live) gpuDirty = true;
   shownLive = live;
   listenStep(dt);
+  camStep(dt);
   const wind = sceneLook ? sceneLook.wind : 0.28;
   const off = baseUniforms.uCloudOffset.value;
   off.x += wind * 0.35 * dt;
@@ -1242,6 +1647,7 @@ function bind() {
   $("tab-elevation").addEventListener("click", () => showToolTab("elevation"));
   $("tab-filtering").addEventListener("click", () => showToolTab("filtering"));
   bindBrush();
+  bindHeightCrop();
   $("seed").addEventListener("change", resetRand);
   $("map").addEventListener("change", () => {
     if ($("map").value) useMap($("map").value);
@@ -1282,6 +1688,18 @@ function bind() {
     specStateText();
     if (audioOn) showSpectrogram(false);
   });
+  $("spec-radial").addEventListener("click", () => {
+    specView.radial = !specView.radial;
+    $("spec-radial").setAttribute("aria-pressed", String(specView.radial));
+    specStateText();
+    if (audioOn) showSpectrogram(false);
+  });
+  $("spec-invert").addEventListener("click", () => {
+    specView.invert = !specView.invert;
+    $("spec-invert").setAttribute("aria-pressed", String(specView.invert));
+    specStateText();
+    if (audioOn) showSpectrogram(false);
+  });
   $("spec-zoom").addEventListener("input", () => {
     specView.zoom = Number($("spec-zoom").value) / 100;
     $("spec-zoom-v").textContent = Math.round(specView.zoom * 100) + "%";
@@ -1290,12 +1708,23 @@ function bind() {
   const levels = () => {
     specView.low = Number($("spec-low").value) / 100;
     specView.high = Number($("spec-high").value) / 100;
+    specView.brightness = Number($("spec-brightness").value) / 100;
     $("spec-low-v").textContent = Math.round(specView.low * 100) + "%";
     $("spec-high-v").textContent = Math.round(specView.high * 100) + "%";
+    $("spec-brightness-v").textContent = Math.round(specView.brightness * 100) + "%";
     if (audioOn) showSpectrogram(false);
   };
+  $("spec-brightness").addEventListener("input", levels);
   $("spec-low").addEventListener("input", levels);
   $("spec-high").addEventListener("input", levels);
+  $("cam-find").addEventListener("click", () => {
+    findCameras();
+  });
+  $("cam-device").addEventListener("change", () => {
+    startCamera($("cam-device").value);
+  });
+  $("cam-smooth").addEventListener("input", readCamOpts);
+  readCamOpts();
   window.addEventListener("resize", onResize);
   window.addEventListener("keydown", (event) => {
     if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;

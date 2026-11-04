@@ -69,18 +69,20 @@ function sample16(src, side, x, y) {
   return top + (bottom - top) * fy;
 }
 
-function applyLevels(src, out, side, low, high) {
+function applyLevels(src, out, side, low, high, brightness) {
   let lo = low;
   let hi = high;
   if (hi < lo + 0.01) hi = lo + 0.01;
-  const scale = 65535 / (hi - lo);
+  const scale = 1 / (hi - lo);
+  // 0.5 = neutral; above lifts toward gray/white, below darkens.
+  const bias = ((brightness == null ? 0.5 : brightness) - 0.5) * 0.9;
   const n = side * side;
   for (let i = 0; i < n; i++) {
     let t = src[i] / 65535;
-    t = (t - lo) * scale;
+    t = (t - lo) * scale + bias;
     if (t < 0) t = 0;
-    else if (t > 65535) t = 65535;
-    out[i] = t | 0;
+    else if (t > 1) t = 1;
+    out[i] = (t * 65535) | 0;
   }
 }
 
@@ -141,6 +143,49 @@ function zoomInto(src, out, side, zoom) {
   }
 }
 
+/**
+ * Stretch a normalized crop rect (0–1) of src to fill out.
+ * @param {Uint16Array} src
+ * @param {Uint16Array} out
+ * @param {number} side
+ * @param {{ x0: number, y0: number, x1: number, y1: number }} crop
+ */
+export function cropStretch(src, out, side, crop) {
+  const last = side - 1;
+  let u0 = Math.min(crop.x0, crop.x1);
+  let v0 = Math.min(crop.y0, crop.y1);
+  let u1 = Math.max(crop.x0, crop.x1);
+  let v1 = Math.max(crop.y0, crop.y1);
+  if (u1 - u0 < 0.02) {
+    const mid = (u0 + u1) * 0.5;
+    u0 = mid - 0.01;
+    u1 = mid + 0.01;
+  }
+  if (v1 - v0 < 0.02) {
+    const mid = (v0 + v1) * 0.5;
+    v0 = mid - 0.01;
+    v1 = mid + 0.01;
+  }
+  u0 = Math.max(0, Math.min(1, u0));
+  v0 = Math.max(0, Math.min(1, v0));
+  u1 = Math.max(0, Math.min(1, u1));
+  v1 = Math.max(0, Math.min(1, v1));
+  const xA = u0 * last;
+  const yA = v0 * last;
+  const xSpan = (u1 - u0) * last;
+  const ySpan = (v1 - v0) * last;
+  for (let y = 0; y < side; y++) {
+    const sy = yA + (y / last) * ySpan;
+    for (let x = 0; x < side; x++) {
+      const sx = xA + (x / last) * xSpan;
+      let v = sample16(src, side, sx, sy);
+      if (v < 0) v = 0;
+      else if (v > 65535) v = 65535;
+      out[y * side + x] = v | 0;
+    }
+  }
+}
+
 function rotateInto(src, out, side, turns) {
   const last = side - 1;
   for (let y = 0; y < side; y++) {
@@ -171,18 +216,69 @@ function mirrorInto(src, out, side) {
   }
 }
 
+function invertInto(src, out, side) {
+  const n = side * side;
+  for (let i = 0; i < n; i++) out[i] = 65535 - src[i];
+}
+
+/**
+ * Rectangular → polar: width wraps to 360°, top of the source becomes the
+ * center, bottom becomes the outer rim. Outside the inscribed circle is 0.
+ */
+function radialInto(src, out, side) {
+  const last = side - 1;
+  const cx = last * 0.5;
+  const cy = last * 0.5;
+  const maxR = cx > 0 ? cx : 1;
+  const twoPi = Math.PI * 2;
+  for (let y = 0; y < side; y++) {
+    const dy = y - cy;
+    const row = y * side;
+    for (let x = 0; x < side; x++) {
+      const dx = x - cx;
+      const r = Math.sqrt(dx * dx + dy * dy);
+      if (r > maxR + 0.5) {
+        out[row + x] = 0;
+        continue;
+      }
+      // 0 at +X, full circle maps across source width.
+      let ang = Math.atan2(dy, dx);
+      if (ang < 0) ang += twoPi;
+      const sx = (ang / twoPi) * last;
+      // Top of source → center, bottom → rim.
+      const sy = Math.min(last, (r / maxR) * last);
+      let v = sample16(src, side, sx, sy);
+      if (v < 0) v = 0;
+      else if (v > 65535) v = 65535;
+      out[row + x] = v | 0;
+    }
+  }
+}
+
 export function presentSpectrogram(src, out, side, view, tmp, tmp2) {
   const blur = view.blur | 0;
   const zoom = view.zoom > 1 ? view.zoom : 1;
   const turns = view.turns & 3;
   const low = view.low || 0;
   const high = view.high == null ? 1 : view.high;
-  const plain = blur < 1 && zoom <= 1.01 && turns === 0 && !view.mirror && low <= 0 && high >= 0.999;
+  const brightness = view.brightness == null ? 0.5 : view.brightness;
+  const radial = !!view.radial;
+  const invert = !!view.invert;
+  const plain =
+    blur < 1 &&
+    zoom <= 1.01 &&
+    turns === 0 &&
+    !view.mirror &&
+    !radial &&
+    !invert &&
+    low <= 0 &&
+    high >= 0.999 &&
+    Math.abs(brightness - 0.5) < 0.005;
   if (plain) {
     if (out !== src) out.set(src);
     return;
   }
-  applyLevels(src, tmp, side, low, high);
+  applyLevels(src, tmp, side, low, high, brightness);
   let cur = tmp;
   if (blur > 0) {
     boxBlur(cur, tmp2, side, blur);
@@ -201,6 +297,17 @@ export function presentSpectrogram(src, out, side, view, tmp, tmp2) {
   if (view.mirror) {
     const dest = cur === tmp ? tmp2 : tmp;
     mirrorInto(cur, dest, side);
+    cur = dest;
+  }
+  // Invert before radial so polar outside stays 0 (black), not flipped white.
+  if (invert) {
+    const dest = cur === tmp ? tmp2 : tmp;
+    invertInto(cur, dest, side);
+    cur = dest;
+  }
+  if (radial) {
+    const dest = cur === tmp ? tmp2 : tmp;
+    radialInto(cur, dest, side);
     cur = dest;
   }
   if (cur !== out) out.set(cur);

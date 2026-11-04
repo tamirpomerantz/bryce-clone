@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Studio — Bryce 3D study</title>
-  <link rel="stylesheet" href="style.css?v=40" />
+  <link rel="stylesheet" href="style.css?v=43" />
   <script type="importmap">
   {
     "imports": {
@@ -43,6 +43,19 @@
       <label>Waves <input id="water-s" type="range" min="0" max="100" step="1" value="32" /><em id="water-s-v"></em></label>
     </section>
     <section>
+      <h2>Camera</h2>
+      <label>Input
+        <select id="cam-device">
+          <option value="">Off</option>
+        </select>
+      </label>
+      <button id="cam-find" type="button">Find cameras</button>
+      <canvas id="cam-view" width="160" height="90"></canvas>
+      <p id="cam-status" class="status"></p>
+      <p class="hint">Up to three hands drive the six sliders. Across the frame is color, earth color, and water color. The top of the frame is the high end of tone, texture, and waves. Positions snapshot every 1.5s, then ease in.</p>
+      <label>Smooth <input id="cam-smooth" type="range" min="0" max="100" step="1" value="70" /><em id="cam-smooth-v">70%</em></label>
+    </section>
+    <section>
       <h2>Terrain editor</h2>
       <label class="check"><input id="listen" type="checkbox" /> Microphone</label>
       <div class="meter-row">
@@ -56,13 +69,24 @@
         <button id="blur-more" type="button">Blur more</button>
         <button id="spec-mirror" type="button" aria-pressed="false">Mirror</button>
         <button id="spec-rotate" type="button">Rotate</button>
+        <button id="spec-radial" type="button" aria-pressed="false">Radial</button>
+        <button id="spec-invert" type="button" aria-pressed="false">Inverse</button>
       </div>
       <p class="hint" id="spec-state">Blur 0</p>
       <label>Zoom <input id="spec-zoom" type="range" min="100" max="400" step="5" value="100" /><em id="spec-zoom-v">100%</em></label>
+      <label>Brightness <input id="spec-brightness" type="range" min="0" max="100" step="1" value="50" /><em id="spec-brightness-v">50%</em></label>
       <label>Low cut <input id="spec-low" type="range" min="0" max="100" step="1" value="0" /><em id="spec-low-v">0%</em></label>
       <label>High cut <input id="spec-high" type="range" min="0" max="100" step="1" value="100" /><em id="spec-high-v">100%</em></label>
-      <canvas id="height-view" width="256" height="256"></canvas>
-      <p class="hint">Paint raises the height. Shift-paint lowers it.</p>
+      <div class="height-wrap" id="height-wrap">
+        <canvas id="height-view" width="256" height="256"></canvas>
+        <div id="height-crop" class="height-crop is-idle" hidden>
+          <span class="height-crop-handle" data-handle="nw"></span>
+          <span class="height-crop-handle" data-handle="ne"></span>
+          <span class="height-crop-handle" data-handle="sw"></span>
+          <span class="height-crop-handle" data-handle="se"></span>
+        </div>
+      </div>
+      <p class="hint">Drag on the map to crop &amp; stretch into the terrain. Double-click resets. Paint raises height; Shift-paint lowers.</p>
       <div class="tabs">
         <button id="tab-elevation" type="button" aria-pressed="true">Elevation</button>
         <button id="tab-filtering" type="button">Filtering</button>
@@ -87,6 +111,6 @@
       <p class="note">Drag to orbit, scroll to dolly, right-drag to pan. Press i to hide this panel. A quicker picture follows the camera, and the full one arrives when it settles.</p>
     </section>
   </aside>
-  <script type="module" src="js/main.js?v=47"></script>
+  <script type="module" src="js/main.js?v=54"></script>
 </body>
 </html>
