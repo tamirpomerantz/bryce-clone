@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Studio — Bryce 3D study</title>
-  <link rel="stylesheet" href="style.css?v=44" />
+  <link rel="stylesheet" href="style.css?v=45" />
   <script type="importmap">
   {
     "imports": {
@@ -22,7 +22,10 @@
       <label>Preset
         <select id="scene"></select>
       </label>
-      <button id="randomize" type="button">Randomize</button>
+      <div class="random-row">
+        <button id="randomize" type="button">Randomize</button>
+        <label class="check"><input id="randomize-auto" type="checkbox" /> Random every 1m</label>
+      </div>
       <label class="check"><input id="orbit" type="checkbox" /> Slow orbit</label>
       <label class="check"><input id="mask" type="checkbox" /> Circle mask</label>
       <label>Radius <input id="mask-r" type="range" min="5" max="100" step="1" value="90" /><em id="mask-r-v"></em></label>
@@ -51,9 +54,15 @@
         </select>
       </label>
       <button id="cam-find" type="button">Find cameras</button>
+      <label>Use
+        <select id="cam-mode">
+          <option value="sliders">Hands for sliders</option>
+          <option value="zoom">Hand for 3D zoom</option>
+        </select>
+      </label>
       <canvas id="cam-view" width="160" height="90"></canvas>
       <p id="cam-status" class="status"></p>
-      <p class="hint">Up to three hands drive the six sliders. Across the frame is color, earth color, and water color. The top of the frame is the high end of tone, texture, and waves. Positions snapshot every 1.5s, then ease in.</p>
+      <p class="hint" id="cam-hint">Up to three hands drive the six sliders. Across the frame is color, earth color, and water color. The top of the frame is the high end of tone, texture, and waves. Positions snapshot every 1.5s, then ease in.</p>
       <label>Smooth <input id="cam-smooth" type="range" min="0" max="100" step="1" value="70" /><em id="cam-smooth-v">70%</em></label>
     </section>
     <section>
@@ -93,7 +102,10 @@
         </div>
       </div>
       <p class="hint">Drag on the map to crop &amp; stretch into the terrain. Double-click resets. Paint raises height; Shift-paint lowers.</p>
-      <button id="terrain-random" type="button">Random</button>
+      <div class="random-row">
+        <button id="terrain-random" type="button">Random</button>
+        <label class="check"><input id="terrain-random-auto" type="checkbox" /> Random every 1m</label>
+      </div>
       <div class="tabs">
         <button id="tab-elevation" type="button" aria-pressed="true">Elevation</button>
         <button id="tab-filtering" type="button">Filtering</button>
@@ -118,6 +130,6 @@
       <p class="note">Drag to orbit, scroll to dolly, right-drag to pan. Press i to hide this panel. A quicker picture follows the camera, and the full one arrives when it settles.</p>
     </section>
   </aside>
-  <script type="module" src="js/main.js?v=58"></script>
+  <script type="module" src="js/main.js?v=61"></script>
 </body>
 </html>

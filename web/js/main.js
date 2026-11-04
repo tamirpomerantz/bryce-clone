@@ -10,7 +10,7 @@ import {
   readSpectrumColumn,
   writeSpectrogram,
 } from "./listen.js?v=10";
-import { createTracker } from "./camera.js?v=2";
+import { createTracker, orbitFromHand } from "./camera.js?v=3";
 import {
   cloudStep,
   hazeBryce30,
@@ -861,6 +861,18 @@ function paintCell(x, y, lower) {
 }
 
 let randomBusy = false;
+const LOOK_IDS = ["sky-c", "sky-t", "earth-c", "earth-t", "water-c", "water-s"];
+const SHIFT_SEC = 6;
+const AUTO_SEC = 60;
+let lookShift = null;
+let landShift = null;
+let lookTimer = 0;
+let landTimer = 0;
+
+function smoothstep(u) {
+  const t = u < 0 ? 0 : u > 1 ? 1 : u;
+  return t * t * (3 - 2 * t);
+}
 
 function syncSpecToggles() {
   $("spec-mirror").setAttribute("aria-pressed", String(!!specView.mirror));
@@ -876,59 +888,201 @@ function applyTerrainStep(name) {
   else grid = { heights: applyEffect(name, grid.heights, grid.side, editorRand), side: grid.side };
 }
 
+function pickSpecLook() {
+  return {
+    blur: (Math.random() * 11) | 0,
+    mirror: Math.random() < 0.5,
+    turns: (Math.random() * 4) | 0,
+    radial: Math.random() < 0.45,
+    invert: Math.random() < 0.35,
+  };
+}
+
+function applySpecLook(look) {
+  specView.blur = look.blur;
+  specView.mirror = look.mirror;
+  specView.turns = look.turns;
+  specView.radial = look.radial;
+  specView.invert = look.invert;
+  syncSpecToggles();
+}
+
+function ensureDodge() {
+  const dodge = $("spec-dodge");
+  if (dodge && !dodge.checked) {
+    dodge.checked = true;
+    syncDodgeHint();
+  }
+}
+
+function rollTerrainTarget() {
+  const seed = 1 + ((Math.random() * 999998) | 0);
+  $("seed").value = String(seed);
+  resetRand();
+  const saved = grid;
+  const light = [];
+  for (const [name] of ELEVATION_TOOLS) {
+    if (name !== "new" && name !== "undo" && name !== "fractal" && name !== "erode") light.push(name);
+  }
+  for (const [name] of FILTERING_TOOLS) light.push(name);
+  const steps = ["new"];
+  const extra = 2 + ((Math.random() * 3) | 0);
+  for (let i = 0; i < extra; i++) steps.push(light[(Math.random() * light.length) | 0]);
+  if (Math.random() < 0.7) steps.splice(1 + ((Math.random() * steps.length) | 0), 0, "fractal");
+  if (Math.random() < 0.55) steps.splice(1 + ((Math.random() * steps.length) | 0), 0, "erode");
+  grid = fitDisplay(newRelief(seed));
+  for (let i = 1; i < steps.length; i++) applyTerrainStep(steps[i]);
+  const to = grid.heights.slice();
+  const side = grid.side;
+  grid = saved;
+  const names = steps.map((name) => (name === "new" ? "New" : TOOL_NAMES[name] || name));
+  return { to, side, names, spec: pickSpecLook() };
+}
+
+function currentLand() {
+  if (audioOn && audioBase && audioBase.length) return audioBase;
+  if (grid.heights && grid.heights !== specHeights) return grid.heights;
+  return grid.heights;
+}
+
 async function randomTerrain() {
   if (randomBusy) return;
   randomBusy = true;
+  landShift = null;
   const button = $("terrain-random");
   if (button) button.disabled = true;
   try {
-    const seed = 1 + ((Math.random() * 999998) | 0);
-    $("seed").value = String(seed);
-    resetRand();
-
-    specView.blur = (Math.random() * 11) | 0;
-    specView.mirror = Math.random() < 0.5;
-    specView.turns = (Math.random() * 4) | 0;
-    specView.radial = Math.random() < 0.45;
-    specView.invert = Math.random() < 0.35;
-    syncSpecToggles();
-
-    const dodge = $("spec-dodge");
-    if (dodge && !dodge.checked) {
-      dodge.checked = true;
-      syncDodgeHint();
-    }
-
-    const light = [];
-    for (const [name] of ELEVATION_TOOLS) {
-      if (name !== "new" && name !== "undo" && name !== "fractal" && name !== "erode") light.push(name);
-    }
-    for (const [name] of FILTERING_TOOLS) light.push(name);
-    const steps = ["new"];
-    const extra = 2 + ((Math.random() * 3) | 0);
-    for (let i = 0; i < extra; i++) steps.push(light[(Math.random() * light.length) | 0]);
-    if (Math.random() < 0.7) steps.splice(1 + ((Math.random() * steps.length) | 0), 0, "fractal");
-    if (Math.random() < 0.55) steps.splice(1 + ((Math.random() * steps.length) | 0), 0, "erode");
-
     setStatus("Random terrain…");
     await paintSoon();
     const t0 = performance.now();
-    grid = fitDisplay(newRelief(seed));
-    for (let i = 1; i < steps.length; i++) applyTerrainStep(steps[i]);
+    const rolled = rollTerrainTarget();
+    ensureDodge();
+    applySpecLook(rolled.spec);
+    grid = { heights: rolled.to.slice(), side: rolled.side };
     buildMesh();
-
     const listen = $("listen");
     if (listen && !listen.checked) {
       listen.checked = true;
       await setListen(true);
     }
-    const names = steps.map((name) => (name === "new" ? "New" : TOOL_NAMES[name] || name));
-    const line = "Random · " + names.join(" · ") + " · " + Math.round(performance.now() - t0) + " ms";
+    const line = "Random · " + rolled.names.join(" · ") + " · " + Math.round(performance.now() - t0) + " ms";
     setStatus(audioOn ? line : line + " · microphone blocked");
   } finally {
     randomBusy = false;
     if (button) button.disabled = false;
   }
+}
+
+function beginLookShift() {
+  lookShift = {
+    from: LOOK_IDS.map((id) => Number($(id).value)),
+    to: LOOK_IDS.map(() => (Math.random() * 101) | 0),
+    start: performance.now(),
+  };
+}
+
+function stepLookShift() {
+  const u = (performance.now() - lookShift.start) / (SHIFT_SEC * 1000);
+  const s = smoothstep(u);
+  for (let i = 0; i < LOOK_IDS.length; i++) {
+    const v = Math.round(lookShift.from[i] + (lookShift.to[i] - lookShift.from[i]) * s);
+    const el = $(LOOK_IDS[i]);
+    if (Number(el.value) !== v) el.value = String(v);
+  }
+  applyLook();
+  if (u >= 1) {
+    lookShift = null;
+    setStatus("Mixed");
+  }
+}
+
+function beginLandShift() {
+  if (randomBusy || landShift) return;
+  randomBusy = true;
+  const button = $("terrain-random");
+  if (button) button.disabled = true;
+  try {
+    const fromSrc = currentLand();
+    const from = fromSrc.slice();
+    const rolled = rollTerrainTarget();
+    if (rolled.to.length !== from.length) return;
+    ensureDodge();
+    const blurFrom = specView.blur;
+    specView.mirror = rolled.spec.mirror;
+    specView.turns = rolled.spec.turns;
+    specView.radial = rolled.spec.radial;
+    specView.invert = rolled.spec.invert;
+    syncSpecToggles();
+    landShift = {
+      from,
+      to: rolled.to,
+      side: rolled.side,
+      names: rolled.names,
+      blurFrom,
+      blurTo: rolled.spec.blur,
+      start: performance.now(),
+    };
+    setStatus("Shifting terrain…");
+    const listen = $("listen");
+    if (listen && !listen.checked) {
+      listen.checked = true;
+      setListen(true);
+    }
+  } finally {
+    randomBusy = false;
+    if (button) button.disabled = false;
+  }
+}
+
+function writeLandLerp(s) {
+  const from = landShift.from;
+  const to = landShift.to;
+  const n = to.length;
+  let out = null;
+  if (audioOn && audioBase && audioBase.length === n) out = audioBase;
+  else if (grid.heights && grid.heights.length === n && grid.heights !== specHeights) out = grid.heights;
+  if (!out) return;
+  for (let i = 0; i < n; i++) out[i] = (from[i] + (to[i] - from[i]) * s) | 0;
+}
+
+function stepLandShift() {
+  const u = (performance.now() - landShift.start) / (SHIFT_SEC * 1000);
+  const s = smoothstep(u);
+  specView.blur = Math.round(landShift.blurFrom + (landShift.blurTo - landShift.blurFrom) * s);
+  specStateText();
+  writeLandLerp(s);
+  if (!audioOn) {
+    if (gpuBaker && !gpuBaker.busy()) uploadField(grid.heights, grid.side);
+    else fieldScale = -1;
+    drawHeight();
+    scheduleBake(true);
+  }
+  if (u >= 1) {
+    const names = landShift.names;
+    landShift = null;
+    if (!audioOn) buildMesh();
+    const line = "Random · " + names.join(" · ");
+    setStatus(audioOn ? line : line + " · microphone blocked");
+  }
+}
+
+function tickAuto(dt) {
+  if ($("randomize-auto")?.checked) {
+    lookTimer += dt;
+    if (!lookShift && lookTimer >= AUTO_SEC) {
+      lookTimer = 0;
+      beginLookShift();
+    }
+  }
+  if (lookShift) stepLookShift();
+  if ($("terrain-random-auto")?.checked) {
+    landTimer += dt;
+    if (!landShift && !randomBusy && landTimer >= AUTO_SEC) {
+      landTimer = 0;
+      beginLandShift();
+    }
+  }
+  if (landShift) stepLandShift();
 }
 
 async function runTool(name) {
@@ -1281,7 +1435,7 @@ async function setListen(on) {
   $("listen-v").textContent = "";
   pushSpectrumColumn(true);
   showSpectrogram(true);
-  setStatus("Listening");
+  if (!landShift) setStatus("Listening");
 }
 
 function listenLabel(text) {
@@ -1557,6 +1711,20 @@ const CAM_PAIRS = [
 ];
 const CAM_COLORS = ["#8ec5ff", "#e0b15a", "#62d0c4"];
 const camOpts = { smooth: 0.7 };
+const ZOOM_TAU = 0.3;
+const ZOOM_LIMITS = {
+  phiMin: 0.42,
+  phiMax: Math.PI * 0.47,
+  nudge: 0.55,
+  sizeMin: 0.06,
+  sizeSpan: 0.34,
+  distFar: 140,
+  distNear: 14,
+  minDistance: 4,
+  maxDistance: 220,
+};
+const zoomPose = { x: 0.5, y: 0.55, size: 0.16, theta: 0, ready: false };
+let zoomDrag = false;
 const camVideo = document.createElement("video");
 camVideo.playsInline = true;
 camVideo.muted = true;
@@ -1573,6 +1741,47 @@ let camRetryTimer = 0;
 function camStatus(text) {
   const el = $("cam-status");
   if (el) el.textContent = text;
+}
+
+function camMode() {
+  return $("cam-mode")?.value === "zoom" ? "zoom" : "sliders";
+}
+
+function syncCamHint() {
+  const el = $("cam-hint");
+  if (!el) return;
+  el.textContent = camMode() === "zoom"
+    ? "One hand drives the view. Up and down sets the camera height, left and right nudges it, and a bigger hand zooms in. Motion eases over 0.3s."
+    : "Up to three hands drive the six sliders. Across the frame is color, earth color, and water color. The top of the frame is the high end of tone, texture, and waves. Positions snapshot every 1.5s, then ease in.";
+}
+
+function seedZoomFromCamera() {
+  const dx = camera.position.x - controls.target.x;
+  const dy = camera.position.y - controls.target.y;
+  const dz = camera.position.z - controls.target.z;
+  const radius = Math.hypot(dx, dy, dz) || 1;
+  const phi = Math.acos(Math.max(-1, Math.min(1, dy / radius)));
+  zoomPose.theta = Math.atan2(dx, dz);
+  const span = ZOOM_LIMITS.phiMax - ZOOM_LIMITS.phiMin;
+  let y = span > 0 ? (phi - ZOOM_LIMITS.phiMin) / span : 0.5;
+  if (y < 0) y = 0;
+  else if (y > 1) y = 1;
+  zoomPose.y = y;
+  zoomPose.x = 0.5;
+  let t = (ZOOM_LIMITS.distFar - radius) / (ZOOM_LIMITS.distFar - ZOOM_LIMITS.distNear);
+  if (t < 0) t = 0;
+  else if (t > 1) t = 1;
+  zoomPose.size = ZOOM_LIMITS.sizeMin + t * ZOOM_LIMITS.sizeSpan;
+  zoomPose.ready = true;
+}
+
+function largestHand() {
+  const hands = camTracker?.hands || [];
+  let best = null;
+  for (const hand of hands) {
+    if (!best || hand.size > best.size) best = hand;
+  }
+  return best;
 }
 
 function seedTracks() {
@@ -1609,6 +1818,25 @@ function paintCamHands() {
   ctx.font = "bold 11px sans-serif";
   ctx.lineWidth = 2;
   const hands = tracker.hands || [];
+  if (camMode() === "zoom") {
+    const hand = largestHand();
+    if (hand) {
+      ctx.strokeStyle = CAM_COLORS[2];
+      ctx.strokeRect(
+        hand.x0 + 0.5,
+        hand.y0 + 0.5,
+        Math.max(1, hand.x1 - hand.x0),
+        Math.max(1, hand.y1 - hand.y0)
+      );
+    }
+    const x = zoomPose.x * (tracker.width - 1);
+    const y = zoomPose.y * (tracker.height - 1);
+    ctx.fillStyle = CAM_COLORS[2];
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
   for (let i = 0; i < hands.length; i++) {
     const hand = hands[i];
     const t = hand.track;
@@ -1629,6 +1857,33 @@ function paintCamHands() {
     ctx.fill();
     ctx.fillText(String(t + 1), x + 5, y - 3);
   }
+}
+
+function easeZoomCamera(dt) {
+  if (viewDrag) {
+    zoomDrag = true;
+    return;
+  }
+  if (zoomDrag) {
+    zoomDrag = false;
+    seedZoomFromCamera();
+  }
+  if (!zoomPose.ready) seedZoomFromCamera();
+  const hand = largestHand();
+  if (!hand) return;
+  const step = dt > 0.05 ? 0.05 : dt;
+  const k = 1 - Math.exp(-step / ZOOM_TAU);
+  zoomPose.x += (hand.x - zoomPose.x) * k;
+  zoomPose.y += (hand.y - zoomPose.y) * k;
+  zoomPose.size += (hand.size - zoomPose.size) * k;
+  const pose = orbitFromHand(zoomPose.x, zoomPose.y, zoomPose.size, zoomPose.theta, ZOOM_LIMITS);
+  const target = controls.target;
+  const sinPhi = Math.sin(pose.phi);
+  camera.position.set(
+    target.x + pose.dist * sinPhi * Math.sin(pose.theta),
+    target.y + pose.dist * Math.cos(pose.phi),
+    target.z + pose.dist * sinPhi * Math.cos(pose.theta)
+  );
 }
 
 function pushTracks() {
@@ -1658,18 +1913,21 @@ function pushTracks() {
 
 function camStep(dt) {
   if (!camStream || camVideo.readyState < 2) return;
+  const zoom = camMode() === "zoom";
   camAcc += dt;
-  // Detect a bit slower than paint — model is heavier than blobs.
-  if (camAcc < 0.08) return;
-  camAcc = 0;
-  const vw = camVideo.videoWidth;
-  const vh = camVideo.videoHeight;
-  if (!vw || !vh) return;
-  ensureCamSize(vw, vh);
-  const err = camTracker.step(camVideo, camOpts, performance.now());
-  if (!camTracker.ready && err) camStatus(err);
-  paintCamHands();
-  pushTracks();
+  if (camAcc >= 0.08) {
+    camAcc = 0;
+    const vw = camVideo.videoWidth;
+    const vh = camVideo.videoHeight;
+    if (vw && vh) {
+      ensureCamSize(vw, vh);
+      const err = camTracker.step(camVideo, camOpts, performance.now());
+      if (!camTracker.ready && err) camStatus(err);
+      paintCamHands();
+      if (!zoom) pushTracks();
+    }
+  }
+  if (zoom) easeZoomCamera(dt);
 }
 
 function stopCamera() {
@@ -1740,7 +1998,8 @@ async function startCamera(deviceId) {
       scheduleCamRetry(deviceId);
     };
   }
-  camStatus("Tracking hands");
+  camStatus(camMode() === "zoom" ? "Tracking one hand" : "Tracking hands");
+  if (camMode() === "zoom") seedZoomFromCamera();
   if (camTracker) void camTracker.ensureModel?.();
 }
 
@@ -1792,6 +2051,7 @@ function frame() {
   const live = gpuLive();
   if (shownLive && !live) gpuDirty = true;
   shownLive = live;
+  tickAuto(dt);
   listenStep(dt);
   camStep(dt);
   const wind = sceneLook ? sceneLook.wind : 0.28;
@@ -1830,7 +2090,8 @@ function frame() {
 }
 
 function randomizeLook() {
-  for (const id of ["sky-c", "sky-t", "earth-c", "earth-t", "water-c", "water-s"]) {
+  lookShift = null;
+  for (const id of LOOK_IDS) {
     $(id).value = String((Math.random() * 101) | 0);
   }
   dropBake();
@@ -1852,6 +2113,12 @@ function bind() {
   fillTools("filtering-tools", FILTERING_TOOLS);
   $("terrain-random").addEventListener("click", () => {
     randomTerrain();
+  });
+  $("randomize-auto").addEventListener("change", () => {
+    lookTimer = $("randomize-auto").checked ? AUTO_SEC : 0;
+  });
+  $("terrain-random-auto").addEventListener("change", () => {
+    landTimer = $("terrain-random-auto").checked ? AUTO_SEC : 0;
   });
   $("tab-elevation").addEventListener("click", () => showToolTab("elevation"));
   $("tab-filtering").addEventListener("click", () => showToolTab("filtering"));
@@ -1949,7 +2216,14 @@ function bind() {
     startCamera($("cam-device").value);
   });
   $("cam-smooth").addEventListener("input", readCamOpts);
+  $("cam-mode").addEventListener("change", () => {
+    syncCamHint();
+    if (camMode() === "zoom") seedZoomFromCamera();
+    else zoomPose.ready = false;
+    if (camStream) camStatus(camMode() === "zoom" ? "Tracking one hand" : "Tracking hands");
+  });
   readCamOpts();
+  syncCamHint();
   window.addEventListener("resize", onResize);
   window.addEventListener("keydown", (event) => {
     if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;

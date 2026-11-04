@@ -36,6 +36,16 @@ async function loadHandLandmarker() {
   return landmarkerPromise;
 }
 
+function handSize(landmarks) {
+  const acrossX = landmarks[5].x - landmarks[17].x;
+  const acrossY = landmarks[5].y - landmarks[17].y;
+  const alongX = landmarks[0].x - landmarks[9].x;
+  const alongY = landmarks[0].y - landmarks[9].y;
+  const across = Math.hypot(acrossX, acrossY);
+  const along = Math.hypot(alongX, alongY);
+  return across > along ? across : along;
+}
+
 function handCenter(landmarks) {
   // Palm-ish: average of wrist (0) + index/middle/ring/pinky MCP (5,9,13,17).
   const ids = [0, 5, 9, 13, 17];
@@ -71,6 +81,24 @@ function handBounds(landmarks, width, height) {
     x1: Math.round(x1 * (width - 1)),
     y1: Math.round(y1 * (height - 1)),
   };
+}
+
+/**
+ * One hand → orbit. Image Y 0 is the top of the frame (high camera).
+ * X nudges azimuth around `homeTheta`. Bigger `size` zooms in.
+ */
+export function orbitFromHand(x, y, size, homeTheta, limits) {
+  const nx = x < 0 ? 0 : x > 1 ? 1 : x;
+  const ny = y < 0 ? 0 : y > 1 ? 1 : y;
+  const phi = limits.phiMin + ny * (limits.phiMax - limits.phiMin);
+  const theta = homeTheta + (nx - 0.5) * limits.nudge;
+  let t = (size - limits.sizeMin) / limits.sizeSpan;
+  if (t < 0) t = 0;
+  else if (t > 1) t = 1;
+  let dist = limits.distFar + (limits.distNear - limits.distFar) * t;
+  if (dist < limits.minDistance) dist = limits.minDistance;
+  else if (dist > limits.maxDistance) dist = limits.maxDistance;
+  return { phi, theta, dist };
 }
 
 function easeOutCubic(t) {
@@ -192,6 +220,7 @@ export function createTracker(width, height) {
         detections.push({
           x: Math.min(1, Math.max(0, c.x)),
           y: Math.min(1, Math.max(0, c.y)),
+          size: handSize(lm),
           x0: b.x0,
           y0: b.y0,
           x1: b.x1,

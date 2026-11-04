@@ -93,7 +93,29 @@ input[type="number"], select {
 
 #panel select { grid-column: 1 / -1; width: 100%; }
 
-#randomize { width: 100%; margin: 2px 0 6px; }
+.random-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 6px;
+}
+
+.random-row button {
+  flex: 1 1 auto;
+  width: auto;
+  margin: 0;
+}
+
+.random-row .check {
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  width: auto;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+#terrain-random { width: auto; margin: 0; }
 
 .swatches {
   display: grid;
@@ -157,7 +179,6 @@ button:active {
 
 #cam-find { width: 100%; margin: 2px 0 4px; }
 
-#terrain-random { width: 100%; margin: 8px 0 4px; }
 
 .height-wrap {
   position: relative;
