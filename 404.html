@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Studio — Bryce 3D study</title>
+  <script>
+    var path = location.pathname;
+    var cut = path.indexOf("/web/");
+    if (cut >= 0) location.replace(path.slice(0, cut + 5));
+    else location.replace(path.replace(/\/[^/]*$/, "/") + "web/");
+  </script>
+</head>
+<body>
+  <p><a href="web/">Studio</a></p>
+</body>
+</html>
