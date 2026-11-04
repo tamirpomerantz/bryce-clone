@@ -2,11 +2,14 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { applyEffect, blank, createRand, erode, fractal, newRelief, resize } from "./terrain.js?v=23";
 import {
+  colorDodgeInto,
+  createBeatTracker,
   cropStretch,
+  lowBandEnergy,
   presentSpectrogram,
   readSpectrumColumn,
   writeSpectrogram,
-} from "./listen.js?v=8";
+} from "./listen.js?v=10";
 import { createTracker } from "./camera.js?v=2";
 import {
   cloudStep,
@@ -29,7 +32,15 @@ import { fillBand, fillFrame } from "./engine/frame.js?v=40";
 import { createGpuBaker } from "./engine/gpu.js?v=40";
 
 const WIDTH = 100;
-const HEIGHT_SCALE = 16;
+const BASE_HEIGHT = 16;
+let fieldScale = -1;
+
+function terrainHeight() {
+  const el = $("land-h");
+  const pct = el ? Number(el.value) : 100;
+  const t = Number.isFinite(pct) ? pct : 100;
+  return BASE_HEIGHT * Math.max(0, t) / 100;
+}
 const DISPLAY_SIDE = 256;
 
 const SCENES = [
@@ -291,12 +302,12 @@ function terrainFloor() {
   const heights = grid.heights;
   let min = 65535;
   for (let i = 0; i < heights.length; i++) if (heights[i] < min) min = heights[i];
-  return (min / 65535) * HEIGHT_SCALE;
+  return (min / 65535) * terrainHeight();
 }
 
 function waterLevel(waveT) {
   const floorY = terrainFloor();
-  const highY = Math.max(floorY, 0.72 * HEIGHT_SCALE);
+  const highY = Math.max(floorY, 0.72 * terrainHeight());
   return floorY + (highY - floorY) * waveT;
 }
 
@@ -329,7 +340,7 @@ function readLook() {
     waterOn: true,
     waterY: waterLevel(waveT),
     waterColour: ink,
-    waveAmp: lerp(0, 2, waveT),
+    waveAmp: lerp(0, 2, waveT) * (terrainHeight() / BASE_HEIGHT),
     waveLength: lerp(3, 0.4, waveT),
     waveHeading: waveT * 360,
   };
@@ -347,6 +358,7 @@ function applyLook() {
   $("water-c-v").textContent = Math.round(unit("water-c") * 100) + "%";
   $("water-s-v").textContent = Math.round(unit("water-s") * 100) + "%";
   $("mask-r-v").textContent = Math.round(readNumber("mask-r")) + "%";
+  $("land-h-v").textContent = Math.round(readNumber("land-h")) + "%";
   $("material").value = String(look.material);
 
   const sunDir = sunDirection(look.az, look.alt);
@@ -467,7 +479,7 @@ function groundState() {
     heights: grid.heights,
     side: grid.side,
     span: WIDTH,
-    heightScale: HEIGHT_SCALE,
+    heightScale: terrainHeight(),
     material: look.material,
     earthTint: look.earthTint,
     earthTex: look.earthTex,
@@ -480,6 +492,26 @@ function groundState() {
     mask: $("mask").checked,
     maskR: readNumber("mask-r") / 100,
   };
+}
+
+function uploadField(heights, side) {
+  if (!gpuBaker || !heights) return;
+  const scale = terrainHeight();
+  gpuBaker.setField(heights, side, WIDTH, scale);
+  fieldScale = scale;
+}
+
+function syncHeightField() {
+  if (!gpuBaker || gpuBaker.busy() || !groundReady) return;
+  const scale = terrainHeight();
+  const audioField = audioOn && specHeights;
+  if (audioField) {
+    if (!gpuDirty && scale === fieldScale) return;
+    uploadField(specHeights, specSide);
+    return;
+  }
+  if (scale === fieldScale) return;
+  uploadField(grid.heights, grid.side);
 }
 
 function gpuKick() {
@@ -654,7 +686,7 @@ function buildMesh() {
       const i = r * side + c;
       const h = heights[i] / 65535;
       pos[i * 3] = (c / seg - 0.5) * WIDTH;
-      pos[i * 3 + 1] = h * HEIGHT_SCALE;
+      pos[i * 3 + 1] = h * terrainHeight();
       pos[i * 3 + 2] = (r / seg - 0.5) * WIDTH;
       ah[i] = h;
     }
@@ -680,7 +712,7 @@ function buildMesh() {
   terrain.geometry.dispose();
   terrain.geometry = geo;
   groundReady = true;
-  if (gpuBaker) gpuBaker.setField(grid.heights, grid.side, WIDTH, HEIGHT_SCALE);
+  if (gpuBaker) uploadField(grid.heights, grid.side);
   drawHeight();
   dropBake();
   showQuickPreview();
@@ -828,6 +860,77 @@ function paintCell(x, y, lower) {
   }
 }
 
+let randomBusy = false;
+
+function syncSpecToggles() {
+  $("spec-mirror").setAttribute("aria-pressed", String(!!specView.mirror));
+  $("spec-radial").setAttribute("aria-pressed", String(!!specView.radial));
+  $("spec-invert").setAttribute("aria-pressed", String(!!specView.invert));
+  specStateText();
+}
+
+function applyTerrainStep(name) {
+  const seed = readNumber("seed") || 1;
+  if (name === "fractal") grid = fractal(grid.heights, grid.side, seed, editorRand);
+  else if (name === "erode") grid = erode(grid.heights, grid.side, seed, editorRand);
+  else grid = { heights: applyEffect(name, grid.heights, grid.side, editorRand), side: grid.side };
+}
+
+async function randomTerrain() {
+  if (randomBusy) return;
+  randomBusy = true;
+  const button = $("terrain-random");
+  if (button) button.disabled = true;
+  try {
+    const seed = 1 + ((Math.random() * 999998) | 0);
+    $("seed").value = String(seed);
+    resetRand();
+
+    specView.blur = (Math.random() * 11) | 0;
+    specView.mirror = Math.random() < 0.5;
+    specView.turns = (Math.random() * 4) | 0;
+    specView.radial = Math.random() < 0.45;
+    specView.invert = Math.random() < 0.35;
+    syncSpecToggles();
+
+    const dodge = $("spec-dodge");
+    if (dodge && !dodge.checked) {
+      dodge.checked = true;
+      syncDodgeHint();
+    }
+
+    const light = [];
+    for (const [name] of ELEVATION_TOOLS) {
+      if (name !== "new" && name !== "undo" && name !== "fractal" && name !== "erode") light.push(name);
+    }
+    for (const [name] of FILTERING_TOOLS) light.push(name);
+    const steps = ["new"];
+    const extra = 2 + ((Math.random() * 3) | 0);
+    for (let i = 0; i < extra; i++) steps.push(light[(Math.random() * light.length) | 0]);
+    if (Math.random() < 0.7) steps.splice(1 + ((Math.random() * steps.length) | 0), 0, "fractal");
+    if (Math.random() < 0.55) steps.splice(1 + ((Math.random() * steps.length) | 0), 0, "erode");
+
+    setStatus("Random terrain…");
+    await paintSoon();
+    const t0 = performance.now();
+    grid = fitDisplay(newRelief(seed));
+    for (let i = 1; i < steps.length; i++) applyTerrainStep(steps[i]);
+    buildMesh();
+
+    const listen = $("listen");
+    if (listen && !listen.checked) {
+      listen.checked = true;
+      await setListen(true);
+    }
+    const names = steps.map((name) => (name === "new" ? "New" : TOOL_NAMES[name] || name));
+    const line = "Random · " + names.join(" · ") + " · " + Math.round(performance.now() - t0) + " ms";
+    setStatus(audioOn ? line : line + " · microphone blocked");
+  } finally {
+    randomBusy = false;
+    if (button) button.disabled = false;
+  }
+}
+
 async function runTool(name) {
   if (name === "undo") {
     const prev = undoStack.pop();
@@ -899,8 +1002,8 @@ function bindBrush() {
       grid = { heights: specDisplay, side: specSide };
       paintCell(p.x, p.y, p.lower);
       grid = saved;
-      applyHeightCrop(specDisplay, specHeights);
-      drawHeight(specDisplay);
+      composeTerrain();
+      drawHeight(specPreview());
     } else {
       paintCell(p.x, p.y, p.lower);
       drawHeight();
@@ -914,8 +1017,8 @@ function bindBrush() {
       grid = { heights: specDisplay, side: specSide };
       paintCell(p.x, p.y, p.lower);
       grid = saved;
-      applyHeightCrop(specDisplay, specHeights);
-      drawHeight(specDisplay);
+      composeTerrain();
+      drawHeight(specPreview());
     } else {
       paintCell(p.x, p.y, p.lower);
       drawHeight();
@@ -1033,6 +1136,11 @@ let specHeights = null;
 let specTmp = null;
 let specTmp2 = null;
 let specHead = 0;
+let specCol = null;
+let specScroll = 0;
+let beatTracker = null;
+let shownBpm = 0;
+let lastBeatLabel = "";
 const specView = { blur: 0, mirror: false, turns: 0, zoom: 1, low: 0, high: 1, brightness: 0.5, radial: false, invert: false };
 let specSide = 0;
 /** @type {null | { x0: number, y0: number, x1: number, y1: number }} normalized crop on the height view */
@@ -1043,6 +1151,24 @@ function listenSense() {
   const el = $("listen-s");
   if (!el) return 0.7;
   return Math.max(0, Math.min(1, Number(el.value) / 100));
+}
+
+function specDodge() {
+  return !!$("spec-dodge")?.checked;
+}
+
+function specDodgeAmount() {
+  const el = $("spec-dodge-amt");
+  if (!el) return 0.4;
+  return Math.max(0, Math.min(1, Number(el.value) / 100));
+}
+
+function syncDodgeHint() {
+  const el = $("listen-hint");
+  if (!el) return;
+  el.textContent = specDodge()
+    ? "The Bryce height map stays, and the spectrogram is color-dodged onto it."
+    : "While the microphone is on, this map is the sound spectrogram.";
 }
 
 function restoreListenBase() {
@@ -1062,6 +1188,12 @@ function stopListen() {
   }
   analyser = null;
   audioFreq = null;
+  specCol = null;
+  specScroll = 0;
+  beatTracker = null;
+  shownBpm = 0;
+  lastBeatLabel = "";
+  beatLabel();
 }
 
 async function setListen(on) {
@@ -1077,6 +1209,12 @@ async function setListen(on) {
     specTmp2 = null;
     specHead = 0;
     specSide = 0;
+    specCol = null;
+    specScroll = 0;
+    beatTracker = null;
+    shownBpm = 0;
+    lastBeatLabel = "";
+    beatLabel();
     heightCrop = null;
     audioMeter = 0;
     lastListenLabel = "";
@@ -1131,6 +1269,11 @@ async function setListen(on) {
   specTmp = new Uint16Array(specSide * specSide);
   specTmp2 = new Uint16Array(specSide * specSide);
   specHead = 0;
+  specCol = new Float32Array(specSide);
+  specScroll = 0;
+  beatTracker = createBeatTracker();
+  shownBpm = 0;
+  lastBeatLabel = "";
   if (!heightCrop) {
     heightCrop = { x0: 0.15, y0: 0.15, x1: 0.85, y1: 0.85 };
   }
@@ -1157,25 +1300,59 @@ function setMeter(level) {
   if (label) label.textContent = audioOn ? pct + "%" : "";
 }
 
+function specSpeed() {
+  const el = $("spec-speed");
+  const v = el ? Number(el.value) : 12;
+  if (v < 1) return 1;
+  if (v > 60) return 60;
+  return v;
+}
+
+function specBeatCols() {
+  const el = $("spec-beat");
+  const v = el ? Number(el.value) : 0;
+  if (v < 0) return 0;
+  if (v > 12) return 12;
+  return v | 0;
+}
+
+function beatLabel() {
+  const cols = specBeatCols();
+  const bpm = shownBpm > 40 ? Math.round(shownBpm) : 0;
+  const text = bpm ? cols + " · " + bpm + " BPM" : String(cols);
+  if (text === lastBeatLabel) return;
+  lastBeatLabel = text;
+  const el = $("spec-beat-v");
+  if (el) el.textContent = text;
+}
+
+function newestSlot() {
+  return ((specHead - 1) % specSide + specSide) % specSide;
+}
+
 function pushSpectrumColumn(fill) {
   analyser.getFloatFrequencyData(audioFreq);
-  const col = readSpectrumColumn(audioFreq, audioCtx.sampleRate, analyser.fftSize, specSide);
+  readSpectrumColumn(audioFreq, audioCtx.sampleRate, analyser.fftSize, specSide, specCol);
   if (fill) {
-    for (let x = 0; x < specSide; x++) specHistory.set(col, x * specSide);
+    for (let x = 0; x < specSide; x++) specHistory.set(specCol, x * specSide);
     specHead = 0;
   } else {
-    specHistory.set(col, specHead * specSide);
-    specHead = (specHead + 1) % specSide;
+    specHistory.set(specCol, newestSlot() * specSide);
   }
   let peakV = 0;
   let peakY = 0;
   for (let y = 0; y < specSide; y++) {
-    if (col[y] > peakV) {
-      peakV = col[y];
+    if (specCol[y] > peakV) {
+      peakV = specCol[y];
       peakY = y;
     }
   }
   listenLabel(peakV < 0.12 ? "" : "Peak " + Math.round((peakY / (specSide - 1)) * 100) + "%");
+}
+
+function advanceColumn() {
+  specHead = (specHead + 1) % specSide;
+  specHistory.set(specCol, newestSlot() * specSide);
 }
 
 function specStateText() {
@@ -1193,20 +1370,33 @@ function applyHeightCrop(src, dest) {
   else if (dest !== src) dest.set(src);
 }
 
+function specPreview() {
+  return specDodge() && audioBase ? specHeights : specDisplay;
+}
+
+function composeTerrain() {
+  if (!specDisplay || !specHeights) return;
+  applyHeightCrop(specDisplay, specHeights);
+  if (specDodge() && audioBase && audioBase.length === specHeights.length) {
+    colorDodgeInto(audioBase, specHeights, specHeights, specDodgeAmount());
+  }
+}
+
 function showSpectrogram(rebuild) {
   if (!specRaw || !specHistory || !specHeights || !specDisplay) return;
   writeSpectrogram(specRaw, specSide, specHistory, specHead, listenSense());
   presentSpectrogram(specRaw, specDisplay, specSide, specView, specTmp, specTmp2);
-  applyHeightCrop(specDisplay, specHeights);
+  composeTerrain();
   grid = { heights: specHeights, side: specSide };
+  const preview = specPreview();
   if (rebuild) {
     audioApplying = true;
     buildMesh();
     audioApplying = false;
-    drawHeight(specDisplay);
+    drawHeight(preview);
     return;
   }
-  drawHeight(specDisplay);
+  drawHeight(preview);
   scheduleBake(true);
 }
 
@@ -1242,8 +1432,9 @@ function normFromEvent(event) {
 
 function refreshTerrainFromCrop() {
   if (!audioOn || !specDisplay || !specHeights) return;
-  applyHeightCrop(specDisplay, specHeights);
+  composeTerrain();
   grid = { heights: specHeights, side: specSide };
+  drawHeight(specPreview());
   scheduleBake(true);
 }
 
@@ -1341,6 +1532,21 @@ function listenStep(dt) {
   audioMeter += (shown - audioMeter) * meterK;
   setMeter(audioMeter);
   pushSpectrumColumn(false);
+  const step = dt > 0.1 ? 0.1 : dt;
+  specScroll += specSpeed() * step;
+  if (beatTracker && audioFreq) {
+    const hit = beatTracker.push(lowBandEnergy(audioFreq, audioCtx.sampleRate), audioCtx.currentTime);
+    if (hit.bpm > 40) shownBpm = shownBpm ? shownBpm + (hit.bpm - shownBpm) * 0.2 : hit.bpm;
+    if (hit.beat) specScroll += specBeatCols();
+  }
+  if (specScroll > 24) specScroll = 24;
+  let guard = 0;
+  while (specScroll >= 1 && guard < 24) {
+    specScroll -= 1;
+    advanceColumn();
+    guard++;
+  }
+  beatLabel();
   showSpectrogram(false);
 }
 
@@ -1604,7 +1810,7 @@ function frame() {
       renderer.render(scene, camera);
       if (gpuHold > 0) gpuHold -= 1;
       else {
-        if (audioOn && specHeights && gpuDirty) gpuBaker.setField(specHeights, specSide, WIDTH, HEIGHT_SCALE);
+        syncHeightField();
         gpuKick();
       }
     }
@@ -1634,7 +1840,7 @@ function randomizeLook() {
 }
 
 function bind() {
-  for (const id of ["sky-c", "sky-t", "earth-c", "earth-t", "water-c", "water-s", "mask-r"]) {
+  for (const id of ["sky-c", "sky-t", "earth-c", "earth-t", "water-c", "water-s", "mask-r", "land-h"]) {
     $(id).addEventListener("input", applyLook);
   }
   $("mask").addEventListener("change", applyLook);
@@ -1644,6 +1850,9 @@ function bind() {
   });
   fillTools("elevation-tools", ELEVATION_TOOLS);
   fillTools("filtering-tools", FILTERING_TOOLS);
+  $("terrain-random").addEventListener("click", () => {
+    randomTerrain();
+  });
   $("tab-elevation").addEventListener("click", () => showToolTab("elevation"));
   $("tab-filtering").addEventListener("click", () => showToolTab("filtering"));
   bindBrush();
@@ -1667,6 +1876,22 @@ function bind() {
     $("listen-s-v").textContent = Math.round(Number($("listen-s").value)) + "%";
     if (audioOn) showSpectrogram(false);
   });
+  $("spec-speed").addEventListener("input", () => {
+    $("spec-speed-v").textContent = specSpeed() + " /s";
+  });
+  $("spec-beat").addEventListener("input", () => {
+    lastBeatLabel = "";
+    beatLabel();
+  });
+  $("spec-dodge").addEventListener("change", () => {
+    syncDodgeHint();
+    if (audioOn) showSpectrogram(false);
+  });
+  $("spec-dodge-amt").addEventListener("input", () => {
+    $("spec-dodge-amt-v").textContent = Math.round(Number($("spec-dodge-amt").value)) + "%";
+    if (audioOn && specDodge()) showSpectrogram(false);
+  });
+  syncDodgeHint();
   $("blur-less").addEventListener("click", () => {
     specView.blur = Math.max(0, specView.blur - 1);
     specStateText();
@@ -1740,7 +1965,7 @@ async function main() {
     if (!gpu) return;
     gpuBaker = gpu;
     dropBake();
-    if (groundReady) gpuBaker.setField(grid.heights, grid.side, WIDTH, HEIGHT_SCALE);
+    if (groundReady) uploadField(grid.heights, grid.side);
     gpuDirty = true;
     gpuSeen = false;
     gpuKick();

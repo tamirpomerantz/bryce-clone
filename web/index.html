@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Studio — Bryce 3D study</title>
-  <link rel="stylesheet" href="style.css?v=43" />
+  <link rel="stylesheet" href="style.css?v=44" />
   <script type="importmap">
   {
     "imports": {
@@ -36,6 +36,7 @@
       <h2>Earth</h2>
       <label>Color <input id="earth-c" type="range" min="0" max="100" step="1" value="14" /><em id="earth-c-v"></em></label>
       <label>Texture <input id="earth-t" type="range" min="0" max="100" step="1" value="8" /><em id="earth-t-v"></em></label>
+      <label>Height <input id="land-h" type="range" min="0" max="300" step="1" value="100" /><em id="land-h-v"></em></label>
     </section>
     <section>
       <h2>Water</h2>
@@ -63,7 +64,12 @@
         <em id="listen-level"></em>
       </div>
       <label>Sensitivity <input id="listen-s" type="range" min="0" max="100" step="1" value="70" /><em id="listen-s-v">70%</em></label>
-      <p class="hint">While the microphone is on, this map is the sound spectrogram. <em id="listen-v"></em></p>
+      <p class="hint"><span id="listen-hint">While the microphone is on, this map is the sound spectrogram.</span> <em id="listen-v"></em></p>
+      <label>Scroll <input id="spec-speed" type="range" min="1" max="60" step="1" value="12" /><em id="spec-speed-v">12 /s</em></label>
+      <label>Beat <input id="spec-beat" type="range" min="0" max="12" step="1" value="0" /><em id="spec-beat-v">0</em></label>
+      <p class="hint">Scroll is columns per second. Beat adds that many columns each time a beat is detected.</p>
+      <label class="check"><input id="spec-dodge" type="checkbox" /> Dodge onto terrain</label>
+      <label>Amount <input id="spec-dodge-amt" type="range" min="0" max="100" step="1" value="40" /><em id="spec-dodge-amt-v">40%</em></label>
       <div class="tool-grid" id="spec-tools">
         <button id="blur-less" type="button">Blur less</button>
         <button id="blur-more" type="button">Blur more</button>
@@ -87,6 +93,7 @@
         </div>
       </div>
       <p class="hint">Drag on the map to crop &amp; stretch into the terrain. Double-click resets. Paint raises height; Shift-paint lowers.</p>
+      <button id="terrain-random" type="button">Random</button>
       <div class="tabs">
         <button id="tab-elevation" type="button" aria-pressed="true">Elevation</button>
         <button id="tab-filtering" type="button">Filtering</button>
@@ -111,6 +118,6 @@
       <p class="note">Drag to orbit, scroll to dolly, right-drag to pan. Press i to hide this panel. A quicker picture follows the camera, and the full one arrives when it settles.</p>
     </section>
   </aside>
-  <script type="module" src="js/main.js?v=54"></script>
+  <script type="module" src="js/main.js?v=58"></script>
 </body>
 </html>

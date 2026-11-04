@@ -5,8 +5,8 @@ function mod(n, m) {
   return ((n % m) + m) % m;
 }
 
-export function readSpectrumColumn(freq, sampleRate, fftSize, side) {
-  const col = new Float32Array(side);
+export function readSpectrumColumn(freq, sampleRate, fftSize, side, out) {
+  const col = out && out.length === side ? out : new Float32Array(side);
   const bins = freq.length;
   const nyquist = sampleRate / 2;
   const lo = 70;
@@ -30,6 +30,89 @@ export function readSpectrumColumn(freq, sampleRate, fftSize, side) {
     col[y] = v;
   }
   return col;
+}
+
+/** Peak loudness of the kick band, 0–1. Used to find beats. */
+export function lowBandEnergy(freq, sampleRate) {
+  const bins = freq.length;
+  const nyquist = sampleRate / 2;
+  const i0 = Math.max(1, Math.floor((45 / nyquist) * bins));
+  const i1 = Math.max(i0 + 1, Math.min(bins, Math.ceil((160 / nyquist) * bins)));
+  let peak = -200;
+  for (let i = i0; i < i1; i++) {
+    const db = freq[i];
+    if (db > peak) peak = db;
+  }
+  if (!Number.isFinite(peak) || peak < -100) return 0;
+  let v = (peak + 60) / 50;
+  if (v < 0) return 0;
+  if (v > 1) return 1;
+  return v;
+}
+
+function tempoFrom(gaps, n, tmp) {
+  for (let i = 0; i < n; i++) tmp[i] = gaps[i];
+  for (let i = 1; i < n; i++) {
+    const v = tmp[i];
+    let j = i - 1;
+    while (j >= 0 && tmp[j] > v) {
+      tmp[j + 1] = tmp[j];
+      j--;
+    }
+    tmp[j + 1] = v;
+  }
+  const mid = tmp[(n - 1) >> 1];
+  if (!(mid > 0)) return 0;
+  let bpm = 60 / mid;
+  while (bpm < 72) bpm *= 2;
+  while (bpm > 180) bpm *= 0.5;
+  return bpm;
+}
+
+/** Onset tracker. `push(energy, nowSeconds)` returns `{ beat, bpm }` and allocates nothing. */
+export function createBeatTracker() {
+  const CAP = 10;
+  const gaps = new Float64Array(CAP);
+  const sortTmp = new Float64Array(CAP);
+  let count = 0;
+  let head = 0;
+  let last = -1;
+  let env = 0;
+  let noise = 0.02;
+  let bpm = 0;
+  return {
+    reset() {
+      count = 0;
+      head = 0;
+      last = -1;
+      env = 0;
+      noise = 0.02;
+      bpm = 0;
+    },
+    push(energy, now) {
+      const e = energy < 0 ? 0 : energy > 1 ? 1 : energy;
+      const flux = e - env;
+      const rise = flux > 0;
+      env += flux * (rise ? 0.55 : 0.12);
+      const pos = rise ? flux : 0;
+      noise = noise * 0.98 + pos * 0.02;
+      let beat = false;
+      if (pos > Math.max(0.045, noise * 2.4) && e > 0.1) {
+        const gap = last < 0 ? 999 : now - last;
+        if (gap > 0.28) {
+          if (last >= 0 && gap < 1.15) {
+            gaps[head] = gap;
+            head = (head + 1) % CAP;
+            if (count < CAP) count++;
+            bpm = tempoFrom(gaps, count, sortTmp);
+          }
+          last = now;
+          beat = true;
+        }
+      }
+      return { beat, bpm };
+    },
+  };
 }
 
 export function writeSpectrogram(out, side, history, head, sense) {
@@ -311,4 +394,27 @@ export function presentSpectrogram(src, out, side, view, tmp, tmp2) {
     cur = dest;
   }
   if (cur !== out) out.set(cur);
+}
+
+/**
+ * Photoshop color dodge of `blend` over `base`, then mixed by `amount`.
+ * Amount 0 leaves the terrain. Amount 1 is a full dodge. Writes `out`.
+ * `blend` and `out` may be the same buffer.
+ */
+export function colorDodgeInto(base, blend, out, amount) {
+  const n = out.length;
+  const a = amount < 0 ? 0 : amount > 1 ? 1 : amount;
+  if (a <= 0) {
+    if (out !== base) out.set(base);
+    return;
+  }
+  for (let i = 0; i < n; i++) {
+    const layer = blend[i] * a;
+    if (layer >= 65534.5) {
+      out[i] = 65535;
+      continue;
+    }
+    const v = (base[i] * 65535) / (65535 - layer);
+    out[i] = v >= 65535 ? 65535 : v | 0;
+  }
 }
